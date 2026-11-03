@@ -277,12 +277,37 @@ function entriesToday(projection, facility, now) {
 }
 
 /**
+ * Whether a single entry pass may enter again: its tariff allows a re-entry
+ * on the same business day (`sameDayReentry`, Pos. 3.4), it entered today,
+ * and its presence ended with an exit - scanned, or at the maximum stay -
+ * not with a reset. The lock period applies to the re-entry as to any entry.
+ *
+ * @param {Object} projection
+ * @param {Object} terms
+ * @param {Object} facility
+ * @param {number} now Epoch ms
+ * @returns {boolean}
+ */
+function reentersToday(projection, terms, facility, now) {
+  const p = projection;
+  return (
+    terms.sameDayReentry === true &&
+    p.lastExitAt !== null &&
+    p.lastEntryAt !== null &&
+    p.lastExitAt >= p.lastEntryAt &&
+    p.usedDays.includes(businessDayOf(now, facility))
+  );
+}
+
+/**
  * The state of a pass at `now`, most binding first: a void or blocked pass
  * is that whatever else holds, an expired one cannot be present.
  *
  * A quota pass at zero is consumed from the business day after its last
  * one: on that day a re-entry stays possible without using quota (Pos. 3.3),
- * so it is not yet consumed.
+ * so it is not yet consumed. A single entry pass is consumed by its entry,
+ * unless its tariff lets it back in today after an exit ({@link
+ * reentersToday}).
  *
  * @param {Object} projection
  * @param {Object} terms
@@ -296,7 +321,11 @@ function stateOf(projection, terms, facility, now) {
   if (p.blocked) return ADMISSION_STATES.BLOCKED;
   if (now >= terms.validUntil) return ADMISSION_STATES.EXPIRED;
   if (isPresent(p, facility, now)) return ADMISSION_STATES.PRESENT;
-  if (terms.usage === USAGE.SINGLE && p.entryCount > 0) {
+  if (
+    terms.usage === USAGE.SINGLE &&
+    p.entryCount > 0 &&
+    !reentersToday(p, terms, facility, now)
+  ) {
     return ADMISSION_STATES.CONSUMED;
   }
   if (
@@ -412,6 +441,7 @@ module.exports = {
   replay,
   isPresent,
   entriesToday,
+  reentersToday,
   stateOf,
   correctionsOf,
   problemsOfEvent,

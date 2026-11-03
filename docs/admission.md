@@ -59,6 +59,7 @@ A tariff is a bookable of type `ticket` under the facility, the one bookable it 
   //      or { type: "relative", months: 12 } | { type: "relative", days: 1 }
   //      or { type: "booking" }  (the booked period, e.g. a day ticket)
   usage: { type: "quota", quota: 10 }, // or { type: "single" } | { type: "unlimited" }
+  // { type: "single", sameDayReentry: true }: back in on the same business day after an exit
   lockMinutes: 180,
   personal: { required: true, photo: true },
   bundle: [{ label: "Erwachsene", count: 2 }, { label: "Kinder", count: 3 }],
@@ -115,14 +116,14 @@ Corrections by the administration need the account and a reason (`problemsOfEven
 
 `decide()` evaluates the six steps in this order; the first refusing step ends the check and names its reason. Only a granted entry or an exit has an effect, written by the caller with a conditional update so that two devices cannot both enter the same pass.
 
-| Step          | Question                                                  | Reasons (German text for the staff)                                                                      |
-| ------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| 1 Code        | readable, issued here, known, this facility?              | `code_unreadable`, `not_a_ticket`, `code_not_genuine`, `code_unknown`, `code_replaced`, `other_facility` |
-| 2 Validity    | not void, not blocked, within validity?                   | `voided` „Ungültig: Buchung storniert“, `blocked` „Gesperrt: {note}“, `not_yet_valid`, `expired`         |
-| 3 Usage       | single entry unused, quota left or today already counted? | `single_entry_used`, `quota_exhausted`                                                                   |
-| 4 Presence    | not checked in without exit?                              | `already_present` „Bereits eingecheckt seit 09:15, kein Austritt erfasst“                                |
-| 5 Lock period | over since the last entry?                                | `lock_period` „Erneuter Eintritt ab 11:30 möglich“                                                       |
-| 6 Capacity    | facility not full, if the tariff checks at entry?         | `capacity_reached`                                                                                       |
+| Step          | Question                                                                                                                  | Reasons (German text for the staff)                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1 Code        | readable, issued here, known, this facility?                                                                              | `code_unreadable`, `not_a_ticket`, `code_not_genuine`, `code_unknown`, `code_replaced`, `other_facility` |
+| 2 Validity    | not void, not blocked, within validity?                                                                                   | `voided` „Ungültig: Buchung storniert“, `blocked` „Gesperrt: {note}“, `not_yet_valid`, `expired`         |
+| 3 Usage       | single entry unused (or, with `sameDayReentry`, back on the same day after an exit), quota left or today already counted? | `single_entry_used`, `quota_exhausted`                                                                   |
+| 4 Presence    | not checked in without exit?                                                                                              | `already_present` „Bereits eingecheckt seit 09:15, kein Austritt erfasst“                                |
+| 5 Lock period | over since the last entry?                                                                                                | `lock_period` „Erneuter Eintritt ab 11:30 möglich“                                                       |
+| 6 Capacity    | facility not full, if the tariff checks at entry?                                                                         | `capacity_reached`                                                                                       |
 
 Results: `granted`, `granted_with_notice`, `denied`; an exit scan answers `exited` or `not_present`. Notices tell the staff what was recorded and never act on it (Pos. 5.5): re-entry without quota, last quota day, compare the person, repeated refused attempts, unusually many entries in a day (thresholds per facility).
 

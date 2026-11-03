@@ -119,6 +119,8 @@ const ADMISSION_NOTICES = Object.freeze({
   REENTRY_NO_QUOTA: "reentry_no_quota",
   /** This entry used the last day of the quota. */
   LAST_QUOTA_DAY: "last_quota_day",
+  /** A single entry pass back on the same business day, after an exit. */
+  REENTRY_SAME_DAY: "reentry_same_day",
   /** The pass is bound to a person: compare name and photo. */
   CHECK_PERSON: "check_person",
   /** Several refused attempts within the lock period (Pos. 5.5). */
@@ -156,6 +158,7 @@ const MESSAGES_DE = Object.freeze({
   [ADMISSION_NOTICES.REENTRY_NO_QUOTA]:
     "Wiedereintritt heute, kein Kontingent verbraucht",
   [ADMISSION_NOTICES.LAST_QUOTA_DAY]: "Letzter Tag des Kontingents",
+  [ADMISSION_NOTICES.REENTRY_SAME_DAY]: "Wiedereintritt heute nach Austritt",
   [ADMISSION_NOTICES.CHECK_PERSON]: "Person prüfen: {holder}",
   [ADMISSION_NOTICES.REPEATED_ATTEMPTS]:
     "Hinweis: {count} abgewiesene Versuche in der Sperrzeit",

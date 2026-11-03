@@ -515,3 +515,88 @@ describe("admission check", () => {
     });
   });
 });
+
+/**
+ * A single entry tariff that lets its guest back in on the same business
+ * day after an exit (Pos. 3.4, answer 6.6 no. 3 of the contracting
+ * authority): the lock period still applies, and the next day the pass is
+ * used.
+ */
+describe("admission check: a single entry with a same-day re-entry", () => {
+  const {
+    stateOf,
+  } = require("../src/commons/services/admission/admission-state");
+  const REENTRY = {
+    ...SEASON,
+    usage: { type: "single", sameDayReentry: true },
+  };
+
+  it("lets the guest back in on the same day after an exit, with a notice", () => {
+    const thePass = pass(REENTRY, [
+      entry("2027-07-01T09:00"),
+      exit("2027-07-01T11:00"),
+    ]);
+
+    const decision = check(thePass, "2027-07-01T14:00");
+
+    expect(decision.result).to.equal(R.GRANTED_WITH_NOTICE);
+    expect(decision.notices.map((n) => n.code)).to.deep.equal([
+      N.REENTRY_SAME_DAY,
+    ]);
+    expect(decision.notices[0].message).to.equal(
+      "Wiedereintritt heute nach Austritt",
+    );
+    expect(decision.effect).to.include({ type: E.ENTRY, consumesDay: false });
+    expect(
+      stateOf(
+        thePass.projection,
+        thePass.terms,
+        FACILITY,
+        at("2027-07-01T14:00"),
+      ),
+    ).to.equal("absent");
+  });
+
+  it("refuses the guest without an exit, and on the next day", () => {
+    // Usage comes before presence: without an exit the entry is used.
+    const present = pass(REENTRY, [entry("2027-07-01T09:00")]);
+    expect(check(present, "2027-07-01T14:00").reason).to.equal(
+      D.SINGLE_ENTRY_USED,
+    );
+
+    const left = pass(REENTRY, [
+      entry("2027-07-01T09:00"),
+      exit("2027-07-01T11:00"),
+    ]);
+    expect(check(left, "2027-07-02T10:00").reason).to.equal(
+      D.SINGLE_ENTRY_USED,
+    );
+    expect(
+      stateOf(left.projection, left.terms, FACILITY, at("2027-07-02T10:00")),
+    ).to.equal("consumed");
+  });
+
+  it("keeps the lock period for the re-entry after an exit", () => {
+    const thePass = pass({ ...REENTRY, lockMinutes: 180 }, [
+      entry("2027-07-01T09:00"),
+      exit("2027-07-01T09:30"),
+    ]);
+
+    const early = check(thePass, "2027-07-01T10:00");
+    expect(early.reason).to.equal(D.LOCK_PERIOD);
+    expect(early.message).to.equal("Erneuter Eintritt ab 12:00 möglich");
+    expect(check(thePass, "2027-07-01T12:00").result).to.equal(
+      R.GRANTED_WITH_NOTICE,
+    );
+  });
+
+  it("keeps a single entry without the switch used by its first entry", () => {
+    const thePass = pass(SINGLE, [
+      entry("2027-07-01T09:00"),
+      exit("2027-07-01T11:00"),
+    ]);
+    expect(check(thePass, "2027-07-01T14:00").reason).to.equal(
+      D.SINGLE_ENTRY_USED,
+    );
+  });
+});

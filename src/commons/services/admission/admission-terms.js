@@ -11,6 +11,8 @@ const { DateTime } = require("luxon");
  *   //      or { type: "relative", months: 12 } | { type: "relative", days: 1 }
  *   //      or { type: "booking" }  (the booked period, e.g. a day ticket)
  *   usage: { type: "quota", quota: 10 }, // or { type: "single" } | { type: "unlimited" }
+ *   //      { type: "single", sameDayReentry: true }: re-entry on the same
+ *   //      business day after an exit (Pos. 3.4)
  *   lockMinutes: 180,                     // no new entry before this has passed
  *   personal: { required: true, photo: true },
  *   bundle: [{ label: "Erwachsene", count: 2 }, { label: "Kinder", count: 3 }],
@@ -94,6 +96,12 @@ function problemsOf(definition) {
     !(Number.isInteger(usage.quota) && usage.quota > 0)
   ) {
     add("usage.quota", "not_positive");
+  }
+  if (
+    usage.sameDayReentry !== undefined &&
+    typeof usage.sameDayReentry !== "boolean"
+  ) {
+    add("usage.sameDayReentry", "invalid");
   }
 
   const lock = definition.lockMinutes ?? 0;
@@ -210,6 +218,9 @@ function snapshotTerms(definition, context) {
     usage: definition.usage.type,
     quota:
       definition.usage.type === USAGE.QUOTA ? definition.usage.quota : null,
+    sameDayReentry:
+      definition.usage.type === USAGE.SINGLE &&
+      definition.usage.sameDayReentry === true,
     lockMinutes: definition.lockMinutes ?? 0,
     personal: Boolean(definition.personal?.required),
     photo: Boolean(definition.personal?.photo),
@@ -270,7 +281,11 @@ function describe(definition) {
 
   const usage = definition.usage;
   if (usage.type === USAGE.SINGLE) {
-    sentences.push("Erlaubt genau einen Eintritt.");
+    sentences.push(
+      usage.sameDayReentry
+        ? "Erlaubt einen Eintritt; ein Wiedereintritt am selben Tag nach einem Austritt ist möglich."
+        : "Erlaubt genau einen Eintritt.",
+    );
   } else if (usage.type === USAGE.UNLIMITED) {
     sentences.push("Erlaubt beliebig viele Eintritte in der Gültigkeit.");
   } else {

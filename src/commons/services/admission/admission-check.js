@@ -15,6 +15,7 @@ const {
   businessDayOf,
   isPresent,
   entriesToday,
+  reentersToday,
   stateOf,
 } = require("./admission-state");
 
@@ -183,7 +184,11 @@ function decide({
   // Step 3: usage.
   const today = businessDayOf(now, facility);
   const dayCounted = p.usedDays.includes(today);
-  if (terms.usage === USAGE.SINGLE && p.entryCount > 0) {
+  const reentry =
+    terms.usage === USAGE.SINGLE &&
+    p.entryCount > 0 &&
+    reentersToday(p, terms, facility, now);
+  if (terms.usage === USAGE.SINGLE && p.entryCount > 0 && !reentry) {
     return refused(DENIAL_REASONS.SINGLE_ENTRY_USED, {
       at: `${date(p.lastEntryAt)} ${time(p.lastEntryAt)}`,
     });
@@ -245,6 +250,9 @@ function decide({
   }
   if (consumesDay && quotaLeft === 0) {
     notices.push(notice(ADMISSION_NOTICES.LAST_QUOTA_DAY));
+  }
+  if (reentry) {
+    notices.push(notice(ADMISSION_NOTICES.REENTRY_SAME_DAY));
   }
   if (terms.personal) {
     notices.push(

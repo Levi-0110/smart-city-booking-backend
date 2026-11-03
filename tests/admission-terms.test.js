@@ -110,6 +110,12 @@ describe("admission terms", () => {
         "bundle",
         "count_not_positive",
       ],
+      [
+        "a same-day re-entry that is no switch",
+        { ...SEASON, usage: { type: "single", sameDayReentry: "yes" } },
+        "usage.sameDayReentry",
+        "invalid",
+      ],
     ];
     cases.forEach(([name, definition, field, code]) => {
       it(`names ${name}`, () => {
@@ -147,6 +153,28 @@ describe("admission terms", () => {
 
   describe("snapshotTerms", () => {
     const issuedAt = at("2027-06-10T14:30");
+
+    it("keeps the same-day re-entry of a single entry tariff, and of no other (Pos. 3.4)", () => {
+      const single = (sameDayReentry) => ({
+        ...SEASON,
+        usage: { type: "single", sameDayReentry },
+      });
+      expect(snapshotTerms(single(true), { issuedAt }).sameDayReentry).to.equal(
+        true,
+      );
+      expect(
+        snapshotTerms(single(false), { issuedAt }).sameDayReentry,
+      ).to.equal(false);
+      expect(
+        snapshotTerms(
+          { ...SEASON, usage: { type: "unlimited", sameDayReentry: true } },
+          { issuedAt },
+        ).sameDayReentry,
+      ).to.equal(false);
+      expect(snapshotTerms(SEASON, { issuedAt }).sameDayReentry).to.equal(
+        false,
+      );
+    });
 
     it("covers the last day of a fixed window in the facility's time zone", () => {
       const terms = snapshotTerms(SEASON, { issuedAt });
@@ -221,6 +249,20 @@ describe("admission terms", () => {
         "Personengebunden: Name und Lichtbild werden am Einlass angezeigt.",
         "Die Kapazität der Einrichtung wird am Einlass geprüft.",
       ]);
+    });
+
+    it("previews a single entry with a re-entry on the same day", () => {
+      expect(
+        describeTerms({
+          ...SEASON,
+          usage: { type: "single", sameDayReentry: true },
+        }),
+      ).to.include(
+        "Erlaubt einen Eintritt; ein Wiedereintritt am selben Tag nach einem Austritt ist möglich.",
+      );
+      expect(
+        describeTerms({ ...SEASON, usage: { type: "single" } }),
+      ).to.include("Erlaubt genau einen Eintritt.");
     });
 
     it("previews a quota card and a relative validity", () => {
