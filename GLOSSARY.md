@@ -223,6 +223,44 @@ _Avoid_: Revoke (als deutsches Nomen), Löschung, Deprovisionierung
 Der Eintrag einer Buchung an einem AccessPoint, der erteilt und nicht widerrufen ist, solange die Buchung noch läuft — die eine Antwort darauf, wem das Löschen eines AccessPoints etwas wegnimmt. Erteilt heißt provisioniert, nicht „hat einen Grant": eine Tür im Modus `remote` gilt ohne Grant als provisioniert, ein bloß vorgemerktes Fach noch nicht. Eine abgelaufene oder abgelehnte Buchung hat keinen laufenden Zugang mehr; eine Buchung ohne Ende endet nie.
 _Avoid_: Aktiver Grant, offener Zugang, Live-Zugriff
 
+### Einlass
+
+**Einrichtung**:
+Ein Buchungsobjekt mit Kapazität, das selbst nicht buchbar ist, etwa ein Freibad; seine Tarife sind ihm untergeordnet. Trägt die Einlass-Einstellungen: Uhrzeit des Tagesresets, maximale Aufenthaltsdauer, Schwellen der Hinweise.
+_Avoid_: Standort (das ist der Ort von AccessPoints), Anlage
+
+**Tarif**:
+Ein der Einrichtung untergeordnetes Buchungsobjekt der Kategorie Eintrittskarte, das beim Kauf Zugangsberechtigungen erzeugt. Seine Berechtigungsdefinition liegt am Buchungsobjekt unter `admission`.
+_Avoid_: Preiskategorie (das ist der Preis), Ticket (das ist die Klammer eines Bündels)
+
+**Zugangsberechtigung**:
+Das Recht einer Person auf Eintritt in eine Einrichtung, entstanden aus einer Buchung; an ihm setzt die Einlassprüfung an. Im Code `pass`. Behält die Berechtigungsangaben des Kaufs, auch wenn der Tarif sich später ändert. Ein Bündel erzeugt eine Zugangsberechtigung je Person unter einem Ticket.
+_Avoid_: Grant (das ist die Berechtigung an einem AccessPoint), Eintrittskarte (das ist der Tarif)
+
+**Berechtigungsangaben**:
+Was eine Zugangsberechtigung erlaubt: Gültigkeitszeitraum, Nutzungsart (Einmaleintritt, unbegrenzt, Kontingent), Sperrzeit, Personenbindung, Prüfzeitpunkt der Kapazität. Bei der Ausstellung aus dem Tarif kopiert.
+_Avoid_: Tarifregeln, Konfiguration
+
+**Zugangskennung**:
+Die 16 Zeichen einer Zugangsberechtigung, die auf dem Ticket im Klartext stehen und im QR-Code mit einer Signatur stecken. Kryptografisch zufällig, mit Prüfzeichen; gespeichert nur als Hash und verschlüsselt.
+_Avoid_: Scan-Code (das ist der Code am AccessPoint), Buchungsnummer, Ticketnummer
+
+**Einlassprüfung**:
+Die eine Prüfung, die ein Scan auslöst: sechs Schritte in fester Reihenfolge (Code, Gültigkeit, Nutzungsart, Anwesenheit, Sperrzeit, Kapazität). Der erste verweigernde Schritt nennt den Grund. Nur ein gewährter Eintritt oder ein Austritt ändert Zustand und Nutzungsprotokoll.
+_Avoid_: Zugangsentscheidung (das ist die Tür), Validierung
+
+**Nutzungsprotokoll**:
+Die Ereignisse einer Zugangsberechtigung in ihrer Reihenfolge: Ein- und Austritte, automatische Austritte, Tagesresets und jeder Eingriff der Verwaltung mit Konto und Begründung. Aus ihm ist der Zustand jederzeit herleitbar; eine Rücknahme löscht nichts, sie wird selbst ein Ereignis.
+_Avoid_: Prüfprotokoll (das hält auch verweigerte Scans fest), Audit-Log
+
+**Geschäftstag (einer Einrichtung)**:
+Der Tag von einem Tagesreset bis zum nächsten, nicht von Mitternacht zu Mitternacht. Er zählt Kontingenttage und begrenzt die Anwesenheit.
+_Avoid_: Kalendertag
+
+**Tagesreset**:
+Schließt zur festgelegten Uhrzeit alle offenen Anwesenheiten einer Einrichtung, nicht abwählbar. Ein zeitgesteuerter Job, der nach Ausfall nachholt; die Prüfung wartet nie auf ihn, denn eine Anwesenheit aus einem früheren Geschäftstag zählt ohnehin nicht mehr.
+_Avoid_: Nachtlauf, Cronjob
+
 ### Buchungslebenszyklus
 
 **Buchungszustand**:
