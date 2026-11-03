@@ -65,6 +65,7 @@ describe("booking lifecycle: the notice of a failed grant", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision recorded",
+      "provision admission.issue skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_CONFIRMATION ok",

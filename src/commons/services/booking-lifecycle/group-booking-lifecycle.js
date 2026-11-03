@@ -1,11 +1,12 @@
 /**
  * The group booking lifecycle (spec part 1, section 7; part 2, section 9):
  * the transitions of a group booking, each declaring its effects as steps
- * of the same pipeline over the same six adapters the single lifecycle
+ * of the same pipeline over the same seven adapters the single lifecycle
  * runs on. A group has no state of its own; its state is the state its
  * members share (glossary "Gruppenzustand"). A transition writes and
- * provisions member by member - every row of a member carries its
- * `bookingId` - and issues one document and sends one mail for the group.
+ * provisions member by member - access and the passes of its tickets, every
+ * row of a member carrying its `bookingId` - and issues one document and
+ * sends one mail for the group.
  * It never calls the transitions of the single lifecycle.
  *
  * `createGroupBookingLifecycle(adapters)` builds an instance over any
@@ -42,7 +43,9 @@ const {
   hasTicketPosition,
   paymentRequestSteps,
   provisionFailureNotice,
+  voidCauseOf,
 } = require("./booking-lifecycle");
+const { hasAdmissionPosition } = require("../admission/admission-issuance");
 const {
   CancellationRefundService,
   refundBankDetails,
@@ -98,6 +101,7 @@ function nextStateOf(group, from, transition, booking) {
  * @param {Object} adapters The seam (spec part 2, section 10)
  * @param {Object} adapters.store
  * @param {Object} adapters.access
+ * @param {Object} adapters.admission
  * @param {Object} adapters.documents
  * @param {Object} adapters.payment
  * @param {Object} adapters.mail
@@ -108,6 +112,7 @@ function createGroupBookingLifecycle(adapters) {
   const {
     store,
     access,
+    admission,
     documents,
     payment,
     mail,
@@ -178,6 +183,33 @@ function createGroupBookingLifecycle(adapters) {
     );
   }
 
+  /**
+   * The passes of every member that books a tariff of them: issued where
+   * the condition read per member holds, or voided with the cause of the
+   * state the member went to.
+   */
+  function admissionEach(bookings, op, when = () => true) {
+    return bookings.map((booking) =>
+      step(
+        PHASE.PROVISION,
+        "admission",
+        op,
+        () =>
+          op === "void"
+            ? admission.void(
+                booking.tenantId,
+                booking,
+                voidCauseOf(booking.status),
+              )
+            : admission.issue(booking.tenantId, booking),
+        {
+          bookingId: booking.id,
+          when: () => hasAdmissionPosition(booking) && when(booking),
+        },
+      ),
+    );
+  }
+
   /** The organizers' notice of every member with a ticket position. */
   function organizerEach(bookings) {
     return bookings.map((booking) =>
@@ -231,7 +263,8 @@ function createGroupBookingLifecycle(adapters) {
    * and 9; glossary "Aufnahme"): the checkout stored the members in the
    * state it chose, the lifecycle runs the effects of that state - per
    * member the hold (in every state: the hold checks the capacity and
-   * aborts) and, at `confirmed`, the grant, one aggregated receipt for a
+   * aborts) and, at `confirmed`, the grant and the passes, one aggregated
+   * receipt for a
    * group confirmed and paid at
    * once, the workflow event `onCreate` per member, then one mail for the
    * group - the receipt of a request, the payment request of a group
@@ -270,6 +303,7 @@ function createGroupBookingLifecycle(adapters) {
     return runPipeline(ctxOf(transition, tenantId, group, bookings), [
       ...accessEach(bookings, "hold"),
       ...accessEach(bookings, "provision", confirmed),
+      ...admissionEach(bookings, "issue", confirmed),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -320,7 +354,8 @@ function createGroupBookingLifecycle(adapters) {
   /**
    * The confirmation of a group (spec part 2, sections 8 and 9): every
    * member `requested → payment_due | confirmed` by its own price, written
-   * one by one; the confirmed ones granted; the workflow told per member;
+   * one by one; the confirmed ones granted and issued their passes; the
+   * workflow told per member;
    * then one free booking confirmation where every member is confirmed,
    * else one payment request for the group, in the form the payment
    * provider answers.
@@ -352,6 +387,7 @@ function createGroupBookingLifecycle(adapters) {
     return runPipeline(ctxOf(transition, tenantId, group, bookings), [
       ...saveEach(bookings, from, transition),
       ...accessEach(bookings, "provision", confirmed),
+      ...admissionEach(bookings, "issue", confirmed),
       ...emitEach(bookings, WORKFLOW_EVENT.COMMIT, trigger),
       notice("FREE_BOOKING_CONFIRMATION", {}, { when: allConfirmed }),
       ...paymentRequestSteps(
@@ -372,7 +408,8 @@ function createGroupBookingLifecycle(adapters) {
 
   /**
    * The payment of a group (spec part 2, sections 8 and 9): every member
-   * `payment_due → confirmed`, written one by one and granted; one
+   * `payment_due → confirmed`, written one by one, granted and issued
+   * their passes; one
    * aggregated receipt attached to every member; the workflow told per
    * member (`onPay`, which the aggregated payment never fired before);
    * one confirmation with the receipt.
@@ -411,6 +448,7 @@ function createGroupBookingLifecycle(adapters) {
     return runPipeline(ctxOf(transition, tenantId, group, bookings), [
       ...saveEach(bookings, from, transition),
       ...accessEach(bookings, "provision"),
+      ...admissionEach(bookings, "issue"),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -440,7 +478,8 @@ function createGroupBookingLifecycle(adapters) {
    * member `requested → rejected`, `payment_due | confirmed → cancelled`,
    * each with the reason and its own refund audit with the state cancelled
    * from and, where a refund is due, the open refund state (glossary
-   * "Erstattungsstand"), written one by one and revoked; one aggregated cancellation
+   * "Erstattungsstand"), written one by one, revoked and their passes
+   * voided; one aggregated cancellation
    * document for a priced group unless the caller leaves it out; the
    * workflow told per member; one rejection mail for a group of requests,
    * one cancel mail otherwise, with the document.
@@ -496,6 +535,7 @@ function createGroupBookingLifecycle(adapters) {
     return runPipeline(ctxOf(transition, tenantId, group, bookings), [
       ...saveEach(bookings, from, transition),
       ...accessEach(bookings, "revoke"),
+      ...admissionEach(bookings, "void"),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -540,8 +580,8 @@ function createGroupBookingLifecycle(adapters) {
    * does it: `rejected → requested`, `cancelled → ` the state it was
    * cancelled from, the reason cleared, the refund audit and an open
    * cancellation request dropped. The other members stay as they are; the
-   * group needs no shared state. Written one by one, then granted at
-   * `confirmed`, held otherwise. A write or a hold that fails aborts, the
+   * group needs no shared state. Written one by one, then granted and the
+   * passes restored at `confirmed`, held otherwise. A write or a hold that fails aborts, the
    * members written before it restored: the group stands as before. The
    * documents stay, no workflow event, no mail.
    *
@@ -612,6 +652,7 @@ function createGroupBookingLifecycle(adapters) {
       ),
       ...accessEach(members, "hold", (booking) => !confirmed(booking)),
       ...accessEach(members, "provision", confirmed),
+      ...admissionEach(members, "issue", confirmed),
       provisionFailureNotice(notice),
     ]);
   }

@@ -77,8 +77,18 @@ const VOID_CAUSES = Object.freeze({
   BOOKING_CANCELLED: "booking_cancelled",
   BOOKING_REJECTED: "booking_rejected",
   BOOKING_WITHDRAWN: "booking_withdrawn",
+  /** The amended booking no longer books the ticket the pass belongs to. */
+  BOOKING_CHANGED: "booking_changed",
   BY_ADMINISTRATION: "by_administration",
 });
+
+/** The causes the booking sets and only the booking takes back. */
+const BOOKING_VOID_CAUSES = Object.freeze([
+  VOID_CAUSES.BOOKING_CANCELLED,
+  VOID_CAUSES.BOOKING_REJECTED,
+  VOID_CAUSES.BOOKING_WITHDRAWN,
+  VOID_CAUSES.BOOKING_CHANGED,
+]);
 
 /** What a check adds for the staff, granted or not (Pos. 5.5). */
 const ADMISSION_NOTICES = Object.freeze({
@@ -130,6 +140,7 @@ const MESSAGES_DE = Object.freeze({
   [VOID_CAUSES.BOOKING_CANCELLED]: "Buchung storniert",
   [VOID_CAUSES.BOOKING_REJECTED]: "Buchung abgelehnt",
   [VOID_CAUSES.BOOKING_WITHDRAWN]: "Buchung widerrufen",
+  [VOID_CAUSES.BOOKING_CHANGED]: "Buchung geändert",
   [VOID_CAUSES.BY_ADMINISTRATION]: "durch die Verwaltung",
 });
 
@@ -162,5 +173,6 @@ module.exports = {
   STEP_OF_REASON,
   ADMISSION_NOTICES,
   VOID_CAUSES,
+  BOOKING_VOID_CAUSES,
   messageOf,
 };

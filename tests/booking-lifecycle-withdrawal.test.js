@@ -74,6 +74,7 @@ describe("booking lifecycle: acceptWithdrawal", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_WITHDRAWAL ok",
@@ -153,6 +154,7 @@ describe("booking lifecycle: acceptWithdrawal", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue skipped",
       "notify workflow.emit ok",
       "notify mail.BOOKING_WITHDRAWAL ok",

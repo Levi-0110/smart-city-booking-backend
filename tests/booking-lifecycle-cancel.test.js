@@ -106,6 +106,7 @@ describe("booking lifecycle: cancel", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REJECTION skipped",
@@ -281,6 +282,7 @@ describe("booking lifecycle: cancel", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REJECTION ok",
@@ -314,6 +316,7 @@ describe("booking lifecycle: cancel", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REJECTION skipped",
@@ -360,6 +363,7 @@ describe("booking lifecycle: cancel", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue skipped",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REJECTION skipped",
@@ -377,7 +381,7 @@ describe("booking lifecycle: cancel", function () {
       withDocument: false,
     });
 
-    expect(effectTable(outcome)[2]).to.equal(
+    expect(effectTable(outcome)[3]).to.equal(
       "document documents.issue skipped",
     );
     expect(adapters.store.rows.get("B-1").attachments).to.deep.equal([]);
@@ -418,6 +422,7 @@ describe("booking lifecycle: cancel", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.revoke ok",
+      "provision admission.void skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REJECTION skipped",
@@ -489,7 +494,7 @@ describe("booking lifecycle: cancel", function () {
       trigger: TRIGGER.WORKFLOW,
     });
 
-    expect(effectTable(outcome)[3]).to.equal("notify workflow.emit skipped");
+    expect(effectTable(outcome)[4]).to.equal("notify workflow.emit skipped");
     expect(adapters.workflow.calls).to.deep.equal([]);
     expect(adapters.store.rows.get("B-1").cancellationRefund).to.include({
       origin: "system",
@@ -606,6 +611,7 @@ describe("booking lifecycle: cancel", function () {
       expect(effectTable(outcome)).to.deep.equal([
         "persist store.save ok",
         "provision access.revoke recorded",
+        "provision admission.void skipped",
         "document documents.issue ok",
         "notify workflow.emit ok",
         "notify mail.BOOKING_REJECTION skipped",
@@ -624,7 +630,7 @@ describe("booking lifecycle: cancel", function () {
         trigger: TRIGGER.ADMIN,
       });
 
-      expect(effectTable(outcome)[2]).to.equal(
+      expect(effectTable(outcome)[3]).to.equal(
         "document documents.issue recorded",
       );
       expect(outcome.failure).to.equal(null);
@@ -833,6 +839,7 @@ describe("booking lifecycle: reinstate", function () {
       "persist store.save ok",
       "provision access.hold skipped",
       "provision access.provision ok",
+      "provision admission.issue skipped",
       "notify mail.ACCESS_PROVISION_FAILED skipped",
     ]);
     expect(outcome).to.include({
@@ -885,6 +892,7 @@ describe("booking lifecycle: reinstate", function () {
       "persist store.save ok",
       "provision access.hold ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "notify mail.ACCESS_PROVISION_FAILED skipped",
     ]);
     expect(adapters.store.rows.get("B-1")).to.include({
@@ -918,6 +926,7 @@ describe("booking lifecycle: reinstate", function () {
       "persist store.save ok",
       "provision access.hold ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "notify mail.ACCESS_PROVISION_FAILED skipped",
     ]);
     expect(adapters.store.rows.get("B-1")).to.include({
@@ -998,8 +1007,9 @@ describe("booking lifecycle: reinstate", function () {
       trigger: TRIGGER.ADMIN,
     });
 
-    expect(effectTable(outcome).slice(-2)).to.deep.equal([
+    expect(effectTable(outcome).slice(-3)).to.deep.equal([
       "provision access.provision recorded",
+      "provision admission.issue skipped",
       "notify mail.ACCESS_PROVISION_FAILED ok",
     ]);
     expect(outcome.failure).to.equal(null);

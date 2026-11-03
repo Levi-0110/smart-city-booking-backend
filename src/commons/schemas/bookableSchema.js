@@ -275,6 +275,10 @@ const bookableSchemaDefinition = {
   relatedBookableIds: { type: [String], default: [] },
   checkoutBookableIds: { type: [Object], default: [] },
   eventId: { type: String, default: "" },
+  // The admission definition of a tariff (docs/admission.md): what one
+  // booked unit issues at the entrance of its facility, the one bookable
+  // the tariff relates to. Only of type `ticket`; null issues nothing.
+  admission: { type: Object, default: null },
   ownerUserId: { type: String, default: "" },
 
   // Additional properties

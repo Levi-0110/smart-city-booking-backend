@@ -296,6 +296,10 @@ function inMemoryAdapters({
   return {
     store,
     access: inMemoryAccess({ failOn: failOn.access }),
+    admission: recordingAdapter("admission", ["issue", "void"], {
+      failOn: failOn.admission,
+      skipOn: skipOn.admission,
+    }),
     documents: inMemoryDocuments(store, { failOn: failOn.documents }),
     payment: inMemoryPayment({
       failOn: failOn.payment,

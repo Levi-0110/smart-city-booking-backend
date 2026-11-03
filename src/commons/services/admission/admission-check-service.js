@@ -13,12 +13,8 @@ const {
   verifyTag,
   lookupHash,
 } = require("./admission-code");
-const {
-  applyEvent,
-  replay,
-  USAGE_EVENTS,
-  ACTOR_SOURCES,
-} = require("./admission-state");
+const { applyEvent, ACTOR_SOURCES } = require("./admission-state");
+const { catchUp, MAX_ATTEMPTS } = require("./admission-log");
 const { DENIAL_REASONS } = require("./admission-reasons");
 const { CAPACITY_CHECK } = require("./admission-terms");
 const {
@@ -30,9 +26,6 @@ const {
 
 /** A check under way that has not answered for this long counts as dead. */
 const PENDING_TIMEOUT_MS = 10 * 1000;
-
-/** How often a check that lost the race for a pass looks again. */
-const MAX_ATTEMPTS = 3;
 
 /** The refusals that count as repeated attempts (Pos. 5.5). */
 const LOCK_REFUSALS = Object.freeze([
@@ -168,7 +161,7 @@ class AdmissionCheckService {
       const now = this.now();
       const resolved = await this._resolve(tenantId, code);
       const pass = resolved.pass
-        ? await this._catchUp(tenantId, resolved.pass)
+        ? await catchUp(this.store, tenantId, resolved.pass)
         : null;
 
       const needsCount =
@@ -264,30 +257,6 @@ class AdmissionCheckService {
       return { codeStatus: CODE_STATUS.REPLACED, pass: null };
     }
     return { codeStatus: CODE_STATUS.FOUND, pass: found.pass };
-  }
-
-  /**
-   * The pass with a projection that has caught up with its usage log: events
-   * a process appended but could not project any more are applied now.
-   *
-   * @private
-   */
-  async _catchUp(tenantId, pass) {
-    const later = await this.store.eventsAfter(tenantId, pass.id, pass.version);
-    if (later.length === 0) {
-      return pass;
-    }
-    const projection = later.some(
-      (event) => event.type === USAGE_EVENTS.UNDO_ENTRY,
-    )
-      ? replay(await this.store.eventsAfter(tenantId, pass.id, 0), pass.terms)
-      : later.reduce(
-          (current, event) => applyEvent(current, event, pass.terms),
-          pass.projection,
-        );
-    const version = later[later.length - 1].seq;
-    await this.store.saveProjection(pass, projection, version);
-    return { ...pass, projection, version };
   }
 }
 

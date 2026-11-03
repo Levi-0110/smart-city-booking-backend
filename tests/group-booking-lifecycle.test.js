@@ -104,6 +104,8 @@ describe("group booking lifecycle: confirm", function () {
       "persist store.save B-2 ok",
       "provision access.provision B-1 skipped",
       "provision access.provision B-2 skipped",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
       "notify mail.FREE_BOOKING_CONFIRMATION skipped",
@@ -164,6 +166,8 @@ describe("group booking lifecycle: confirm, the other cases", function () {
       "persist store.save B-2 ok",
       "provision access.provision B-1 ok",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
       "notify mail.FREE_BOOKING_CONFIRMATION ok",
@@ -200,6 +204,8 @@ describe("group booking lifecycle: confirm, the other cases", function () {
       "persist store.save B-2 ok",
       "provision access.provision B-1 skipped",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
       "notify mail.FREE_BOOKING_CONFIRMATION skipped",
@@ -222,7 +228,7 @@ describe("group booking lifecycle: confirm, the other cases", function () {
       trigger: TRIGGER.WORKFLOW,
     });
 
-    expect(effectTable(outcome).slice(4, 6)).to.deep.equal([
+    expect(effectTable(outcome).slice(6, 8)).to.deep.equal([
       "notify workflow.emit B-1 skipped",
       "notify workflow.emit B-2 skipped",
     ]);
@@ -300,6 +306,8 @@ describe("group booking lifecycle: confirm, the other cases", function () {
       "persist store.save B-2 ok",
       "provision access.provision B-1 ok",
       "provision access.provision B-2 recorded",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
       "notify mail.FREE_BOOKING_CONFIRMATION ok",
@@ -545,6 +553,8 @@ describe("group booking lifecycle: pay", function () {
       "persist store.save B-2 ok",
       "provision access.provision B-1 ok",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "document documents.issue ok",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
@@ -668,6 +678,8 @@ describe("group booking lifecycle: cancel", function () {
       "persist store.save B-2 ok",
       "provision access.revoke B-1 ok",
       "provision access.revoke B-2 ok",
+      "provision admission.void B-1 skipped",
+      "provision admission.void B-2 skipped",
       "document documents.issue ok",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
@@ -852,7 +864,7 @@ describe("group booking lifecycle: cancel", function () {
       cancelledAt: NOW - DAY,
     });
 
-    expect(effectTable(outcome).slice(5, 7)).to.deep.equal([
+    expect(effectTable(outcome).slice(7, 9)).to.deep.equal([
       "notify workflow.emit B-1 skipped",
       "notify workflow.emit B-2 skipped",
     ]);
@@ -876,9 +888,11 @@ describe("group booking lifecycle: cancel", function () {
       trigger: TRIGGER.ADMIN,
     });
 
-    expect(effectTable(outcome).slice(2, 5)).to.deep.equal([
+    expect(effectTable(outcome).slice(2, 7)).to.deep.equal([
       "provision access.revoke B-1 recorded",
       "provision access.revoke B-2 ok",
+      "provision admission.void B-1 skipped",
+      "provision admission.void B-2 skipped",
       "document documents.issue ok",
     ]);
     expect(adapters.mail.calls).to.have.length(1);
@@ -951,6 +965,8 @@ describe("group booking lifecycle: admit", function () {
       "provision access.hold B-2 ok",
       "provision access.provision B-1 skipped",
       "provision access.provision B-2 skipped",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "document documents.issue skipped",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
@@ -1002,6 +1018,8 @@ describe("group booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.include.members([
       "provision access.hold B-1 ok",
       "provision access.hold B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "document documents.issue skipped",
       "notify mail.BOOKING_REQUEST_CONFIRMATION skipped",
       "notify payment.requestPayment ok",
@@ -1057,6 +1075,8 @@ describe("group booking lifecycle: admit", function () {
       "provision access.hold B-2 ok",
       "provision access.provision B-1 ok",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "document documents.issue ok",
       "notify workflow.emit B-1 ok",
       "notify workflow.emit B-2 ok",
@@ -1095,6 +1115,8 @@ describe("group booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.include.members([
       "provision access.provision B-1 ok",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "document documents.issue skipped",
       "notify mail.BOOKING_CONFIRMATION skipped",
       "notify mail.FREE_BOOKING_CONFIRMATION ok",
@@ -1180,6 +1202,8 @@ describe("group booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.include.members([
       "provision access.provision B-1 recorded",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "document documents.issue ok",
       "notify mail.BOOKING_CONFIRMATION ok",
     ]);
@@ -1228,6 +1252,8 @@ describe("group booking lifecycle: reinstate", function () {
       "provision access.hold B-2 skipped",
       "provision access.provision B-1 ok",
       "provision access.provision B-2 ok",
+      "provision admission.issue B-1 skipped",
+      "provision admission.issue B-2 skipped",
       "notify mail.ACCESS_PROVISION_FAILED skipped",
     ]);
     expect(outcome.status).to.equal("confirmed");

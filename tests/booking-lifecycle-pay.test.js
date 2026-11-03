@@ -44,6 +44,7 @@ function booking(overrides = {}) {
 const PAY_TABLE = [
   "persist store.save ok",
   "provision access.provision ok",
+  "provision admission.issue skipped",
   "document documents.issue ok",
   "notify workflow.emit ok",
   "notify mail.BOOKING_CONFIRMATION ok",
@@ -127,6 +128,7 @@ describe("booking lifecycle: pay", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision ok",
+      "provision admission.issue skipped",
       "document documents.issue ok",
       "notify workflow.emit skipped",
       "notify mail.BOOKING_CONFIRMATION ok",
@@ -271,6 +273,7 @@ describe("booking lifecycle: pay", function () {
       expect(effectTable(outcome)).to.deep.equal([
         "persist store.save ok",
         "provision access.provision recorded",
+        "provision admission.issue skipped",
         "document documents.issue ok",
         "notify workflow.emit ok",
         "notify mail.BOOKING_CONFIRMATION ok",
@@ -293,6 +296,7 @@ describe("booking lifecycle: pay", function () {
       expect(effectTable(outcome)).to.deep.equal([
         "persist store.save ok",
         "provision access.provision ok",
+        "provision admission.issue skipped",
         "document documents.issue recorded",
         "notify workflow.emit ok",
         "notify mail.BOOKING_CONFIRMATION ok",
@@ -315,7 +319,7 @@ describe("booking lifecycle: pay", function () {
         trigger: TRIGGER.ADMIN,
       });
 
-      expect(effectTable(outcome)[4]).to.equal(
+      expect(effectTable(outcome)[5]).to.equal(
         "notify mail.BOOKING_CONFIRMATION recorded",
       );
       expect(outcome.failure).to.equal(null);

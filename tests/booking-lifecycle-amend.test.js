@@ -91,6 +91,7 @@ describe("booking lifecycle: amend", function () {
       "provision access.update ok",
       "provision access.hold skipped",
       "provision access.revoke skipped",
+      "provision admission.issue skipped",
     ]);
     expect(outcome).to.include({
       transition: "amend",
@@ -135,6 +136,7 @@ describe("booking lifecycle: amend", function () {
         "provision access.update skipped",
         "provision access.hold ok",
         "provision access.revoke ok",
+        "provision admission.issue skipped",
       ]);
       expect(outcome.status).to.equal(status);
       expect(adapters.store.rows.get("B-1")).to.include({
@@ -176,6 +178,7 @@ describe("booking lifecycle: amend", function () {
       "provision access.update skipped",
       "provision access.hold skipped",
       "provision access.revoke skipped",
+      "provision admission.issue skipped",
     ]);
     expect(adapters.store.rows.get("B-1")).to.include({
       status: "rejected",
@@ -215,6 +218,7 @@ describe("booking lifecycle: amend", function () {
       "provision access.update skipped",
       "provision access.hold skipped",
       "provision access.revoke skipped",
+      "provision admission.issue skipped",
     ]);
     const stored = adapters.store.rows.get("B-1");
     expect(stored).to.include({
@@ -328,6 +332,7 @@ describe("booking lifecycle: amend", function () {
       "provision access.update recorded",
       "provision access.hold skipped",
       "provision access.revoke skipped",
+      "provision admission.issue skipped",
     ]);
     expect(outcome.failure).to.equal(null);
     expect(adapters.store.rows.get("B-1")).to.include({

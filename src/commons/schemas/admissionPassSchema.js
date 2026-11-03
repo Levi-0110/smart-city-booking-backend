@@ -13,8 +13,14 @@ const admissionPassSchemaDefinition = {
   /** The tariff (a bookable of type `ticket`) it was bought as. */
   tariffId: { type: String, default: null },
   bookingId: { type: String, default: null },
-  /** Position within the bundle of its booking, from 1, and its label. */
+  /**
+   * The ticket of the booking the pass belongs to (glossary "Ticket"): the
+   * booked units of its tariff, numbered from 1 within the booking.
+   */
+  ticket: { type: Number, default: 1 },
+  /** Position within the bundle of its ticket, from 1. */
   position: { type: Number, default: 1 },
+  /** What the staff reads: the tariff and the person of the bundle. */
   label: { type: String, default: null },
   /** `{ name }` of a personal pass, null otherwise. */
   holder: { type: Object, default: null },

@@ -1,8 +1,9 @@
 /**
  * The booking lifecycle (glossary "Buchungslebenszyklus"; spec part 1,
  * section 8 and part 2, section 8): the transitions of a single booking,
- * each declaring its effects as steps of the pipeline over the six adapters
- * of the seam - store, access, documents, payment, mail, workflow.
+ * each declaring its effects as steps of the pipeline over the seven
+ * adapters of the seam - store, access, admission, documents, payment, mail,
+ * workflow.
  *
  * `createBookingLifecycle(adapters)` builds an instance over any adapters;
  * the default instance below runs over the production adapters in
@@ -41,6 +42,8 @@ const {
   refundBankDetails,
 } = require("../payment/cancellation-refund-service");
 const { BOOKING_HOOK_TYPES } = require("../../entities/booking/bookingHook");
+const { hasAdmissionPosition } = require("../admission/admission-issuance");
+const { VOID_CAUSES } = require("../admission/admission-reasons");
 const { isPrivateBooking } = require("../checkout/business-booking");
 const { encryptBankDetails } = require("../../utilities/bank-details");
 const { NotFoundError, ForbiddenError } = require("../../../errors/BaseError");
@@ -77,6 +80,20 @@ function hasTicketPosition(booking) {
   return (booking.bookableItems || []).some(
     (item) => item?._bookableUsed?.type === "ticket",
   );
+}
+
+/**
+ * The cause the passes of a cancelled booking are voided with (glossary
+ * "Zugangsberechtigung"): a request turned down is rejected, every other
+ * booking cancelled.
+ *
+ * @param {string} status The state the booking went to
+ * @returns {string} One of VOID_CAUSES
+ */
+function voidCauseOf(status) {
+  return status === STATUS.REJECTED
+    ? VOID_CAUSES.BOOKING_REJECTED
+    : VOID_CAUSES.BOOKING_CANCELLED;
 }
 
 function assertTrigger(transition, trigger) {
@@ -177,6 +194,7 @@ function provisionFailureNotice(notice) {
  * @param {Object} adapters The seam (spec part 2, section 10)
  * @param {Object} adapters.store
  * @param {Object} adapters.access
+ * @param {Object} adapters.admission
  * @param {Object} adapters.documents
  * @param {Object} adapters.payment
  * @param {Object} adapters.mail
@@ -187,12 +205,35 @@ function createBookingLifecycle(adapters) {
   const {
     store,
     access,
+    admission,
     documents,
     payment,
     mail,
     workflow,
     clock = Date.now,
   } = adapters;
+
+  /** The issuance of a booking's passes, where it books a tariff of them. */
+  function issueStep(tenantId, booking, when = () => true) {
+    return step(
+      PHASE.PROVISION,
+      "admission",
+      "issue",
+      () => admission.issue(tenantId, booking),
+      { when: () => hasAdmissionPosition(booking) && when() },
+    );
+  }
+
+  /** The end of a booking's passes with the booking, under the cause given. */
+  function voidStep(tenantId, booking, cause) {
+    return step(
+      PHASE.PROVISION,
+      "admission",
+      "void",
+      () => admission.void(tenantId, booking, cause),
+      { when: () => hasAdmissionPosition(booking) },
+    );
+  }
 
   /** The notices of one booking over the mail adapter. */
   function noticeOf(tenantId, bookingId) {
@@ -225,7 +266,8 @@ function createBookingLifecycle(adapters) {
    * compartments are held - in every state, the hold being the one step
    * that checks their capacity and aborts, so a booking that finds none
    * never exists - and the access granted at `confirmed`, consuming the
-   * hold; a booking confirmed and paid at once gets its receipt; then the
+   * hold, and the passes of its tickets issued; a booking confirmed and
+   * paid at once gets its receipt; then the
    * workflow is told (`onCreate`), the customer gets
    * exactly one mail - the receipt of a request, the payment request
    * (glossary "Zahlungsaufforderung") of a booking awaiting payment in the
@@ -267,6 +309,7 @@ function createBookingLifecycle(adapters) {
         () => access.provision(tenantId, bookingId),
         { when: confirmed },
       ),
+      issueStep(tenantId, booking, confirmed),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -323,9 +366,10 @@ function createBookingLifecycle(adapters) {
    * The confirmation: `requested →
    * payment_due` for a priced booking, which is then asked to pay
    * (glossary "Zahlungsaufforderung") in the form the payment provider
-   * answers, `requested → confirmed` for a free one, which is granted and
-   * told so. A tenant without a payment service leaves the payment request
-   * skipped: the booking awaits payment all the same.
+   * answers, `requested → confirmed` for a free one, which is granted,
+   * issued the passes of its tickets and told so. A tenant without a
+   * payment service leaves the payment request skipped: the booking awaits
+   * payment all the same.
    *
    * @param {string} tenantId
    * @param {string} bookingId
@@ -355,6 +399,7 @@ function createBookingLifecycle(adapters) {
         () => access.provision(tenantId, bookingId),
         { when: confirmed },
       ),
+      issueStep(tenantId, booking, confirmed),
       step(
         PHASE.NOTIFY,
         "workflow",
@@ -380,7 +425,8 @@ function createBookingLifecycle(adapters) {
   }
 
   /**
-   * The payment: `payment_due → confirmed`.
+   * The payment: `payment_due → confirmed`, with the grant, the passes of
+   * its tickets, the receipt and the confirmation.
    *
    * @param {string} tenantId
    * @param {string} bookingId
@@ -415,6 +461,7 @@ function createBookingLifecycle(adapters) {
       step(PHASE.PROVISION, "access", "provision", () =>
         access.provision(tenantId, bookingId),
       ),
+      issueStep(tenantId, booking),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -450,13 +497,13 @@ function createBookingLifecycle(adapters) {
    * carries the reason, the refund audit with the state cancelled from
    * (glossary "Wiederherstellung" returns to it) and, where a refund is
    * due, the open refund state (glossary "Erstattungsstand"), and drops the
-   * hook of a cancellation request; then the access is revoked, the cancellation
-   * document issued for a priced booking unless the caller leaves it out,
-   * with the bank details of a paid one (`refundBankDetails`), the workflow
-   * told and the customer mailed - the rejection of a request
-   * the administration or the system turned down, the cancellation
-   * otherwise (a request the customer withdrew, directly or through a hook,
-   * reads as a cancellation).
+   * hook of a cancellation request; then the access is revoked, the passes
+   * of its tickets voided, the cancellation document issued for a priced
+   * booking unless the caller leaves it out, with the bank details of a
+   * paid one (`refundBankDetails`), the workflow told and the customer
+   * mailed - the rejection of a request the administration or the system
+   * turned down, the cancellation otherwise (a request the customer
+   * withdrew, directly or through a hook, reads as a cancellation).
    *
    * @param {string} tenantId
    * @param {string} bookingId
@@ -519,6 +566,7 @@ function createBookingLifecycle(adapters) {
       step(PHASE.PROVISION, "access", "revoke", () =>
         access.revoke(tenantId, bookingId),
       ),
+      voidStep(tenantId, booking, voidCauseOf(booking.status)),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -633,8 +681,9 @@ function createBookingLifecycle(adapters) {
    * cleared, the refund audit removed and an open cancellation request
    * (hook `REJECT`) dropped. The access is granted again at
    * `confirmed`, held at `requested | payment_due` - a hold that fails
-   * aborts, the booking is cancelled again. No document, no workflow
-   * event, no mail.
+   * aborts, the booking is cancelled again. At `confirmed` the passes the
+   * cancellation voided are restored, with their codes; one that was never
+   * issued is issued now. No document, no workflow event, no mail.
    *
    * @param {string} tenantId
    * @param {string} bookingId
@@ -683,6 +732,7 @@ function createBookingLifecycle(adapters) {
         () => access.provision(tenantId, bookingId),
         { when: confirmed },
       ),
+      issueStep(tenantId, booking, confirmed),
       provisionFailureNotice(notice),
     ]);
   }
@@ -703,8 +753,10 @@ function createBookingLifecycle(adapters) {
    * now, so the hold comes first and a hold that fails aborts before
    * anything is revoked: the booking is its old self again, its old holds
    * standing), then whatever an unpaid booking still holds granted is
-   * taken back. Nothing at `rejected | cancelled`. No document, no
-   * workflow event, no mail.
+   * taken back. The passes follow the tickets at `confirmed`: a ticket
+   * booked anew is issued, one no longer booked voided, the others stay.
+   * Nothing at `rejected | cancelled`. No document, no workflow event, no
+   * mail.
    *
    * @param {string} tenantId
    * @param {Object} booking The booking as it is to be, prepared by the
@@ -757,6 +809,17 @@ function createBookingLifecycle(adapters) {
         () => access.revoke(tenantId, bookingId),
         { when: unpaid },
       ),
+      step(
+        PHASE.PROVISION,
+        "admission",
+        "issue",
+        () => admission.issue(tenantId, booking),
+        {
+          when: () =>
+            confirmed() &&
+            (hasAdmissionPosition(current) || hasAdmissionPosition(booking)),
+        },
+      ),
     ]);
   }
 
@@ -768,10 +831,10 @@ function createBookingLifecycle(adapters) {
    * what is still to pay lapses with `payment_due`, what was paid is
    * refunded in full - the refund audit records 100 % and the state left,
    * and the open refund state where the booking was paid (glossary
-   * "Erstattungsstand"). Then the access is revoked, the withdrawal
-   * receipt (glossary "Widerrufbeleg") issued for a priced booking, the
-   * workflow told as of a
-   * cancellation and the customer sent the confirmation of the withdrawal.
+   * "Erstattungsstand"). Then the access is revoked, the passes of its
+   * tickets voided, the withdrawal receipt (glossary "Widerrufbeleg")
+   * issued for a priced booking, the workflow told as of a cancellation and
+   * the customer sent the confirmation of the withdrawal.
    * Only a private booking has a withdrawal (glossary "Geschäftliche
    * Buchung"): a business one is `ForbiddenError
    * booking_withdrawal_not_private`, in front of the state guard.
@@ -824,6 +887,7 @@ function createBookingLifecycle(adapters) {
       step(PHASE.PROVISION, "access", "revoke", () =>
         access.revoke(tenantId, bookingId),
       ),
+      voidStep(tenantId, booking, VOID_CAUSES.BOOKING_WITHDRAWN),
       step(
         PHASE.DOCUMENT,
         "documents",
@@ -881,4 +945,5 @@ module.exports = {
   hasTicketPosition,
   paymentRequestSteps,
   provisionFailureNotice,
+  voidCauseOf,
 };

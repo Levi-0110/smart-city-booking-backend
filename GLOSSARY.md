@@ -234,8 +234,12 @@ Ein der Einrichtung untergeordnetes Buchungsobjekt der Kategorie Eintrittskarte,
 _Avoid_: Preiskategorie (das ist der Preis), Ticket (das ist die Klammer eines Bündels)
 
 **Zugangsberechtigung**:
-Das Recht einer Person auf Eintritt in eine Einrichtung, entstanden aus einer Buchung; an ihm setzt die Einlassprüfung an. Im Code `pass`. Behält die Berechtigungsangaben des Kaufs, auch wenn der Tarif sich später ändert. Ein Bündel erzeugt eine Zugangsberechtigung je Person unter einem Ticket.
+Das Recht einer Person auf Eintritt in eine Einrichtung, entstanden aus einer Buchung; an ihm setzt die Einlassprüfung an. Im Code `pass`. Behält die Berechtigungsangaben des Kaufs, auch wenn der Tarif sich später ändert. Ein Bündel erzeugt eine Zugangsberechtigung je Person unter einem Ticket. Ausgestellt, sobald die Buchung bestätigt ist; ungültig mit ihrem Storno, ihrer Ablehnung oder ihrem Widerruf, mit derselben Zugangskennung wieder gültig nach ihrer Wiederherstellung.
 _Avoid_: Grant (das ist die Berechtigung an einem AccessPoint), Eintrittskarte (das ist der Tarif)
+
+**Ticket**:
+Die Klammer um die Zugangsberechtigungen, die eine gebuchte Einheit eines Tarifs erzeugt: bei einer Familiensaisonkarte fünf Personen unter einem Ticket, bei einer Einzelkarte eine. In der Buchung je Tarif von 1 an gezählt; eine Zugangsberechtigung belegt genau einen Platz aus Tarif, Ticket und Position im Bündel.
+_Avoid_: Eintrittskarte (das ist der Tarif), Buchungsposition (die kann mehrere Tickets umfassen)
 
 **Berechtigungsangaben**:
 Was eine Zugangsberechtigung erlaubt: Gültigkeitszeitraum, Nutzungsart (Einmaleintritt, unbegrenzt, Kontingent), Sperrzeit, Personenbindung, Prüfzeitpunkt der Kapazität. Bei der Ausstellung aus dem Tarif kopiert.
@@ -308,7 +312,7 @@ Der Buchungszustand, den alle Mitglieder einer Gruppenbuchung teilen; die Gruppe
 _Avoid_: Gruppenstatus (als gespeicherter Wert — den gibt es nicht), allCommitted/allPaid (das sind Ableitungen über die Flags), Sammelstatus
 
 **Fehlerpolitik (eines Effekts)**:
-Was ein gescheiterter Effekt mit seinem Lebenszyklus-Übergang macht: _abbrechen_ (der Übergang findet nicht statt, schon Geschriebenes wird zurückgenommen) oder _protokollieren_ (der Übergang gilt, der Fehler steht im Ergebnis und im Log). Am Effekt festgelegt, für jeden Übergang gleich, nie vom Aufrufer gewählt. Nur das Speichern und die Vormerkung brechen ab; Zugang, Dokument und Mitteilungen werden protokolliert.
+Was ein gescheiterter Effekt mit seinem Lebenszyklus-Übergang macht: _abbrechen_ (der Übergang findet nicht statt, schon Geschriebenes wird zurückgenommen) oder _protokollieren_ (der Übergang gilt, der Fehler steht im Ergebnis und im Log). Am Effekt festgelegt, für jeden Übergang gleich, nie vom Aufrufer gewählt. Nur das Speichern und die Vormerkung brechen ab; Zugang, Zugangsberechtigungen, Dokument und Mitteilungen werden protokolliert.
 _Avoid_: onFailure (als Sprechbegriff), Verschlucken, Rollback (das ist die Handlung beim Abbrechen, nicht die Politik), Retry (gibt es nicht)
 
 **Ausstellung (eines Buchungsdokuments)**:

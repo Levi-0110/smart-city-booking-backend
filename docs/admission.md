@@ -2,14 +2,14 @@
 
 Admission management turns a booking of an entrance ticket into passes that are checked at the entrance of a facility, such as a public pool: season, day, quota, family and group tickets, and time-limited access for a group of people. German terms in the [glossary](../GLOSSARY.md#einlass).
 
-**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, device access and the check route `POST /api/:tenant/admission/checks`. The route is mounted, but no device can be registered yet, so it answers `401` to every caller. The registration of devices by the administration, the reset job at startup and the issuance from the booking lifecycle follow (see [Next steps](#next-steps)). Existing booking, approval and cancellation paths are untouched.
+**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, device access, the check route `POST /api/:tenant/admission/checks` and the issuance of passes from the booking lifecycle. The route is mounted, but no device can be registered yet, so it answers `401` to every caller. The registration of devices by the administration and the reset job at startup follow (see [Next steps](#next-steps)). The booking, approval and cancellation paths gain one recorded step each and are otherwise untouched; a booking without a tariff of admission skips it.
 
 ## Where it sits
 
 ```
  Booking (bookings)                 the place of payment, cancellation and proof, unchanged
-   │  lifecycle adapter "admission" (planned): issue on admit/confirm/pay,
-   │  void on cancel/reject/acceptWithdrawal, restore on reinstate
+   │  lifecycle adapter "admission": issue at confirmed (admit, confirm, pay,
+   │  reinstate, amend), void on cancel, reject and acceptWithdrawal
    ▼
  Pass (one per person)              terms snapshot · code hash · projection
    │  appends to
@@ -21,25 +21,28 @@ Admission management turns a booking of an entrance ticket into passes that are 
                       ─► catch up ─► decide() ─► append to usage log ─► answer
 ```
 
-| Module                                          | Responsibility                                                                                                  |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `services/admission/admission-terms.js`         | Admission definition of a tariff, its validation, the snapshot a pass keeps, the German rule preview (Pos. 3.6) |
-| `services/admission/admission-code.js`          | Access identifier, check symbol, signed QR payload, lookup hash, reading a scan or typed text                   |
-| `services/admission/admission-state.js`         | Usage events, projection, replay, computed state, corrections allowed per state                                 |
-| `services/admission/admission-check.js`         | The six steps of the check, result, reason, notices, the one effect                                             |
-| `services/admission/admission-reset.js`         | Daily reset and maximum stay as a plan for the scheduled job                                                    |
-| `services/admission/admission-reasons.js`       | Vocabulary and German texts of results, reasons, notices, void causes                                           |
-| `services/admission/admission-store.js`         | Passes, usage log, check log, devices, facility settings: MongoDB for the API, in memory for the tests          |
-| `services/admission/admission-check-service.js` | The check of one scan: idempotent by `scanId`, one entry per pass under concurrent scans, check log             |
-| `services/admission/admission-devices.js`       | Device keys, the device middleware (`Authorization: Device <key>`), block and renew                             |
-| `platform/api/routes/admission.routes.js`       | `POST /checks` under `/api/:tenant/admission`                                                                   |
-| `services/scheduler/`                           | Recurring jobs with lease, catch-up, retry and status, shared by all instances                                  |
+| Module                                             | Responsibility                                                                                                     |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `services/admission/admission-terms.js`            | Admission definition of a tariff, its validation, the snapshot a pass keeps, the German rule preview (Pos. 3.6)    |
+| `services/admission/admission-code.js`             | Access identifier, check symbol, signed QR payload, lookup hash, reading a scan or typed text                      |
+| `services/admission/admission-state.js`            | Usage events, projection, replay, computed state, corrections allowed per state                                    |
+| `services/admission/admission-check.js`            | The six steps of the check, result, reason, notices, the one effect                                                |
+| `services/admission/admission-reset.js`            | Daily reset and maximum stay as a plan for the scheduled job                                                       |
+| `services/admission/admission-reasons.js`          | Vocabulary and German texts of results, reasons, notices, void causes                                              |
+| `services/admission/admission-store.js`            | Passes, usage log, check log, devices, facility settings: MongoDB for the API, in memory for the tests             |
+| `services/admission/admission-check-service.js`    | The check of one scan: idempotent by `scanId`, one entry per pass under concurrent scans, check log                |
+| `services/admission/admission-devices.js`          | Device keys, the device middleware (`Authorization: Device <key>`), block and renew                                |
+| `services/admission/admission-issuance.js`         | The passes a booking issues, one per person and booked unit; their restore and void with the booking               |
+| `services/admission/admission-log.js`              | A projection caught up with the usage log; an event appended at the next position, again where a device came first |
+| `services/booking-lifecycle/adapters/admission.js` | The lifecycle adapter `admission`: `issue` and `void`, recorded on failure                                         |
+| `platform/api/routes/admission.routes.js`          | `POST /checks` under `/api/:tenant/admission`                                                                      |
+| `services/scheduler/`                              | Recurring jobs with lease, catch-up, retry and status, shared by all instances                                     |
 
 The core modules (terms, code, state, check, reset, reasons) are pure functions over plain objects; they read no clock, database or environment. That keeps the rules the entrance depends on testable on their own. The store, the check service and the device access are the layer around them; the check service gets clock and ids injected, so its tests run on a fixed clock.
 
 ## Tariff definition
 
-A tariff is a bookable of type `ticket` under the facility. Its definition, at `bookable.admission`:
+A tariff is a bookable of type `ticket` under the facility, the one bookable it relates to (`relatedBookableIds`). Its definition, at `bookable.admission`:
 
 ```js
 {
@@ -114,15 +117,40 @@ Corrections by the administration need the account and a reason (`problemsOfEven
 
 Results: `granted`, `granted_with_notice`, `denied`; an exit scan answers `exited` or `not_present`. Notices tell the staff what was recorded and never act on it (Pos. 5.5): re-entry without quota, last quota day, compare the person, repeated refused attempts, unusually many entries in a day (thresholds per facility).
 
+## Issuance
+
+The booking lifecycle calls the adapter `admission` in its provision phase, after the access steps, for a booking that books a tariff (`hasAdmissionPosition`):
+
+| Transition                      | Step              | When                                                                  |
+| ------------------------------- | ----------------- | --------------------------------------------------------------------- |
+| `admit`, `confirm`, `reinstate` | `admission.issue` | the booking is `confirmed` afterwards                                 |
+| `pay`                           | `admission.issue` | always: `payment_due → confirmed`                                     |
+| `amend`                         | `admission.issue` | `confirmed`, and the old or the new content books a tariff            |
+| `cancel`                        | `admission.void`  | cause `booking_rejected` for a request, `booking_cancelled` otherwise |
+| `acceptWithdrawal`              | `admission.void`  | cause `booking_withdrawn`                                             |
+
+The group lifecycle runs the same steps per member. Both operations have the failure policy `record`, as the grant at an access point has: the booking stays paid and confirmed, the failure stands in the outcome and in the log, and a second run issues what is missing.
+
+What a booking issues comes from the tariff as the booking holds it since its checkout (`bookableItems[]._bookableUsed`), so the terms are those of the purchase: per booked unit one ticket, under it one pass per person of the bundle. A pass holds one slot of its booking, `tariffId + ticket + position`, unique per tenant and booking; tickets are numbered per tariff, so an amendment of one position leaves the others where they were. A pass admits to the facility its tariff relates to (`relatedBookableIds`, exactly one) and takes the time zone of its terms from that facility's admission settings. Its label is the tariff's title, with the person of the bundle (`Familiensaisonkarte · Kinder`). The identifier is drawn at random and stored as hash and encrypted (`CRYPTO_SECRET`); the pass carries no name, address or contact of the booker. A personal pass is issued without holder; the names of its persons come with the ticket (next steps).
+
+`issue` makes the passes match the booking and can run any number of times:
+
+- a slot without a pass is issued;
+- a pass the booking voided is restored, with its code, so the ticket the customer holds works again after a reinstatement;
+- a pass whose slot the booking no longer books is voided with `booking_changed`;
+- a pass voided by the administration stays void.
+
+`void` voids every pass of the booking that is not void yet; passes and logs stay as proof (Pos. 6.4). A tariff without exactly one facility, a facility without admission settings or an invalid definition holds up only its own passes: the others are issued, then the call fails and names what is missing. A void or restore that loses the next position of the log to a device reads the pass again and writes behind it.
+
 ## Storage
 
-| Collection            | Holds                                                                                                                                           | Unique                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `admissionpasses`     | Pass: tenant, facility, tariff, booking, position, label, holder, code hash, retired hashes, encrypted identifier, terms, projection, `version` | `tenantId+id`, `tenantId+codeHash` |
-| `admissionevents`     | Usage log: one event per position `seq` of a pass, with type, time, business day and actor                                                      | `tenantId+passId+seq`              |
-| `admissionchecks`     | Check log: every scan with device, direction, result, step, reason and the answer it got                                                        | `tenantId+scanId`                  |
-| `admissiondevices`    | Devices: facility, name, key hash, status, created, renewed, last seen                                                                          | `tenantId+id`, `keyHash`           |
-| `admissionfacilities` | Admission settings of a facility: reset time, time zone, maximum stay, exit scan, notice thresholds                                             | `tenantId+facilityId`              |
+| Collection            | Holds                                                                                                                                                   | Unique                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `admissionpasses`     | Pass: tenant, facility, tariff, booking, ticket, position, label, holder, code hash, retired hashes, encrypted identifier, terms, projection, `version` | `tenantId+id`, `tenantId+codeHash`, slot `tenantId+bookingId+tariffId+ticket+position` |
+| `admissionevents`     | Usage log: one event per position `seq` of a pass, with type, time, business day and actor                                                              | `tenantId+passId+seq`                                                                  |
+| `admissionchecks`     | Check log: every scan with device, direction, result, step, reason and the answer it got                                                                | `tenantId+scanId`                                                                      |
+| `admissiondevices`    | Devices: facility, name, key hash, status, created, renewed, last seen                                                                                  | `tenantId+id`, `keyHash`                                                               |
+| `admissionfacilities` | Admission settings of a facility: reset time, time zone, maximum stay, exit scan, notice thresholds                                                     | `tenantId+facilityId`                                                                  |
 
 The capacity is the `amount` of the facility's bookable; a facility without admission settings answers `404 admission_facility_not_found`.
 
@@ -198,10 +226,9 @@ The reset job runs every few minutes. `planReset` names the presences to close: 
 ## Next steps
 
 1. Administration routes for devices (register, block, renew) and facility settings; the reset job registered with the scheduler at startup.
-2. Issuance as lifecycle adapter `admission` with the failure policy of the other adapters.
-3. Roles: an admission-only right next to the six existing groups; administration views and corrections; check UI.
-4. Ticket PDF per pass on the existing PDF service, with a template per tenant.
+2. Roles: an admission-only right next to the six existing groups; administration views and corrections; check UI.
+3. Ticket PDF per pass on the existing PDF service, with a template per tenant, and the names of the persons of a personal pass; with it the notice to the tenant where an issuance was recorded as failed.
 
 ## Tests
 
-`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, and the filters the MongoDB store sends. The route appears in the authorization snapshot with `401` for every principal.
+`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, and the filters the MongoDB store sends. The issuance: one pass per person and unit, nothing twice also under two runs at once, void and restore with the booking's cause, an amendment, a void of the administration that stays, the tariffs it cannot issue named, a void behind a device's entry; the lifecycle's steps per transition and per group member, and a failed issuance recorded. The route appears in the authorization snapshot with `401` for every principal.

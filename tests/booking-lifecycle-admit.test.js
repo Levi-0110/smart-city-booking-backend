@@ -74,6 +74,7 @@ describe("booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "provision access.hold ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "document documents.issue skipped",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REQUEST_CONFIRMATION ok",
@@ -125,6 +126,7 @@ describe("booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "provision access.hold ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "document documents.issue skipped",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REQUEST_CONFIRMATION skipped",
@@ -193,6 +195,7 @@ describe("booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "provision access.hold ok",
       "provision access.provision ok",
+      "provision admission.issue skipped",
       "document documents.issue ok",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REQUEST_CONFIRMATION skipped",
@@ -238,6 +241,7 @@ describe("booking lifecycle: admit", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "provision access.hold ok",
       "provision access.provision ok",
+      "provision admission.issue skipped",
       "document documents.issue skipped",
       "notify workflow.emit ok",
       "notify mail.BOOKING_REQUEST_CONFIRMATION skipped",
@@ -344,6 +348,7 @@ describe("booking lifecycle: admit", function () {
 
     expect(effectTable(outcome)).to.include.members([
       "provision access.provision recorded",
+      "provision admission.issue skipped",
       "document documents.issue ok",
       "notify mail.BOOKING_CONFIRMATION ok",
     ]);

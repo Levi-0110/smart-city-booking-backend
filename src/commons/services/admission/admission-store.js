@@ -4,6 +4,10 @@
  * usage log, the check log, the devices at the entrances and the admission
  * settings of the facilities.
  *
+ * A pass issued from a booking holds one slot of it - tariff, ticket and
+ * position in the bundle - and a slot holds one pass: of two issuances of
+ * the same booking at the same moment only one can insert it.
+ *
  * The usage log is the source of truth of a pass and its own lock: an event
  * is appended at the next position of the pass's log (`seq`, unique per
  * pass), so of two devices that scan the same pass at the same moment only
@@ -29,6 +33,15 @@ function presenceFloor(facility, now) {
 }
 
 const copy = (value) => (value == null ? value : structuredClone(value));
+
+/** The slot of a booking a pass holds (unique, see the model's index). */
+const sameSlot = (a, b) =>
+  a.tenantId === b.tenantId &&
+  a.bookingId != null &&
+  a.bookingId === b.bookingId &&
+  a.tariffId === b.tariffId &&
+  a.ticket === b.ticket &&
+  a.position === b.position;
 
 /** In memory, for the tests: the same answers as the MongoDB store. */
 class MemoryAdmissionStore {
@@ -67,6 +80,29 @@ class MemoryAdmissionStore {
 
   async passById(tenantId, passId) {
     return copy(this.passes.get(`${tenantId}:${passId}`) ?? null);
+  }
+
+  async passesOfBooking(tenantId, bookingId) {
+    return [...this.passes.values()]
+      .filter(
+        (pass) => pass.tenantId === tenantId && pass.bookingId === bookingId,
+      )
+      .map(copy);
+  }
+
+  async insertPass(pass) {
+    const taken = [...this.passes.values()].some(
+      (stored) =>
+        stored.tenantId === pass.tenantId &&
+        (stored.id === pass.id ||
+          stored.codeHash === pass.codeHash ||
+          sameSlot(stored, pass)),
+    );
+    if (taken) {
+      return false;
+    }
+    this.putPass(pass);
+    return true;
   }
 
   async appendEvent(pass, event, projection) {
@@ -199,6 +235,23 @@ class MongoAdmissionStore {
 
   async passById(tenantId, passId) {
     return await this.model("passes").findOne({ tenantId, id: passId }).lean();
+  }
+
+  async passesOfBooking(tenantId, bookingId) {
+    return await this.model("passes").find({ tenantId, bookingId }).lean();
+  }
+
+  /** False where the id, the code or the slot is taken. */
+  async insertPass(pass) {
+    try {
+      await this.model("passes").create(pass);
+      return true;
+    } catch (err) {
+      if (err?.code === DUPLICATE_KEY) {
+        return false;
+      }
+      throw err;
+    }
   }
 
   async appendEvent(pass, event, projection) {

@@ -141,6 +141,25 @@ describe("admission store in MongoDB", () => {
     expect(await store.facility(TENANT, "freibad")).to.equal(null);
   });
 
+  it("lists the passes of a booking and refuses a pass whose slot or code is taken", async () => {
+    const pass = { tenantId: TENANT, id: "pass-1", bookingId: "B-1" };
+    models.passes.create
+      .onSecondCall()
+      .rejects(Object.assign(new Error("E11000"), { code: 11000 }));
+
+    await store.passesOfBooking(TENANT, "B-1");
+    const inserted = [
+      await store.insertPass(pass),
+      await store.insertPass(pass),
+    ];
+
+    expect(models.passes.find.firstCall.args[0]).to.deep.equal({
+      tenantId: TENANT,
+      bookingId: "B-1",
+    });
+    expect(inserted).to.deep.equal([true, false]);
+  });
+
   it("finds a pass by its code, and by a code it was reissued from", async () => {
     const pass = { id: "pass-1" };
     models.passes.findOne

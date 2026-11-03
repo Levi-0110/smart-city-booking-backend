@@ -60,6 +60,7 @@ describe("booking lifecycle: confirm", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "notify workflow.emit ok",
       "notify mail.FREE_BOOKING_CONFIRMATION skipped",
       "notify payment.requestPayment ok",
@@ -115,6 +116,7 @@ describe("booking lifecycle: confirm", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision ok",
+      "provision admission.issue skipped",
       "notify workflow.emit ok",
       "notify mail.FREE_BOOKING_CONFIRMATION ok",
       "notify payment.requestPayment skipped",
@@ -157,6 +159,7 @@ describe("booking lifecycle: confirm", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "notify workflow.emit ok",
       "notify mail.FREE_BOOKING_CONFIRMATION skipped",
       "notify payment.requestPayment skipped",
@@ -174,6 +177,7 @@ describe("booking lifecycle: confirm", function () {
     const table = (form) => [
       "persist store.save ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "notify workflow.emit ok",
       "notify mail.FREE_BOOKING_CONFIRMATION skipped",
       "notify payment.requestPayment ok",
@@ -277,6 +281,7 @@ describe("booking lifecycle: confirm", function () {
       expect(effectTable(outcome)).to.deep.equal([
         "persist store.save ok",
         "provision access.provision skipped",
+        "provision admission.issue skipped",
         "notify workflow.emit ok",
         "notify mail.FREE_BOOKING_CONFIRMATION skipped",
         "notify payment.requestPayment recorded",
@@ -300,6 +305,7 @@ describe("booking lifecycle: confirm", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision skipped",
+      "provision admission.issue skipped",
       "notify workflow.emit skipped",
       "notify mail.FREE_BOOKING_CONFIRMATION skipped",
       "notify payment.requestPayment ok",
@@ -360,6 +366,7 @@ describe("booking lifecycle: confirm", function () {
     expect(effectTable(outcome)).to.deep.equal([
       "persist store.save ok",
       "provision access.provision ok",
+      "provision admission.issue skipped",
       "notify workflow.emit ok",
       "notify mail.FREE_BOOKING_CONFIRMATION ok",
       "notify payment.requestPayment skipped",
@@ -466,6 +473,7 @@ describe("booking lifecycle: confirm", function () {
       expect(effectTable(outcome)).to.deep.equal([
         "persist store.save ok",
         "provision access.provision recorded",
+        "provision admission.issue skipped",
         "notify workflow.emit ok",
         "notify mail.FREE_BOOKING_CONFIRMATION ok",
         "notify payment.requestPayment skipped",
@@ -492,7 +500,7 @@ describe("booking lifecycle: confirm", function () {
         trigger: TRIGGER.ADMIN,
       });
 
-      expect(effectTable(outcome)[4]).to.equal(
+      expect(effectTable(outcome)[5]).to.equal(
         "notify payment.requestPayment recorded",
         "notify mail.PAYMENT_LINK_AFTER_APPROVAL skipped",
         "notify mail.INVOICE_AFTER_APPROVAL skipped",

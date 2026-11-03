@@ -6,9 +6,9 @@
  * A transition declares its steps as data - phase, adapter, operation, a
  * closure that runs it, a condition - and `runPipeline` runs them. Four
  * phases in a fixed order: `persist` (the store writes), `provision` (the
- * access seam), `document` (the issuance of booking documents), `notify`
- * (workflow event, mails, payment request). Steps declared out of that
- * order are refused before any effect runs.
+ * access seam and the passes of admission), `document` (the issuance of
+ * booking documents), `notify` (workflow event, mails, payment request).
+ * Steps declared out of that order are refused before any effect runs.
  *
  * The failure policy belongs to the adapter operation (glossary
  * "Fehlerpolitik"): `POLICY_TABLE` says for every operation whether its
@@ -66,6 +66,8 @@ const POLICY_TABLE = Object.freeze({
   "access.update": POLICY.RECORD,
   "access.revoke": POLICY.RECORD,
   "access.refreshHolds": POLICY.RECORD,
+  "admission.issue": POLICY.RECORD,
+  "admission.void": POLICY.RECORD,
   "documents.issue": POLICY.RECORD,
   "payment.requestPayment": POLICY.RECORD,
   "mail.*": POLICY.RECORD,

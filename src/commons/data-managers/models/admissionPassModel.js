@@ -12,6 +12,11 @@ AdmissionPassSchema.index({ tenantId: 1, id: 1 }, { unique: true });
 AdmissionPassSchema.index({ tenantId: 1, codeHash: 1 }, { unique: true });
 AdmissionPassSchema.index({ tenantId: 1, retiredCodeHashes: 1 });
 AdmissionPassSchema.index({ tenantId: 1, bookingId: 1 });
+// One pass per slot of a booking: two issuances cannot both insert it.
+AdmissionPassSchema.index(
+  { tenantId: 1, bookingId: 1, tariffId: 1, ticket: 1, position: 1 },
+  { unique: true, partialFilterExpression: { bookingId: { $type: "string" } } },
+);
 AdmissionPassSchema.index({
   tenantId: 1,
   facilityId: 1,
