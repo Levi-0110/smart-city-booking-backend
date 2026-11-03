@@ -4,6 +4,11 @@
  * usage log, the check log, the devices at the entrances and the admission
  * settings of the facilities.
  *
+ * A device is no record of its own: it is an access point of the provider
+ * `admission` (collection `accessPoints`) joined with its entry in the
+ * `deviceKeys` of the tenant's access application `admission` (collection
+ * `tenants`), as admission-app.js describes.
+ *
  * A pass issued from a booking holds one slot of it - tariff, ticket and
  * position in the bundle - and a slot holds one pass: of two issuances of
  * the same booking at the same moment only one can insert it.
@@ -23,6 +28,17 @@
  */
 
 const { businessDayStart } = require("./admission-state");
+const {
+  ADMISSION_PROVIDER,
+  ADMISSION_APP,
+  ADMISSION_APP_FILTER,
+  DEVICE_KEY_FIELDS,
+  admissionAppOf,
+  deviceOf,
+  deviceKeyEntryOf,
+  accessPointFieldsOf,
+} = require("./admission-app");
+const { ConflictError } = require("../../../errors/BaseError");
 
 const DUPLICATE_KEY = 11000;
 
@@ -38,6 +54,19 @@ function presenceFloor(facility, now) {
 }
 
 const copy = (value) => (value == null ? value : structuredClone(value));
+
+/** The devices the oldest first; those without a key yet at the end. */
+const byCreation = (a, b) =>
+  (a.createdAt ?? Infinity) - (b.createdAt ?? Infinity) ||
+  String(a.id).localeCompare(String(b.id));
+
+/** Only the fields of an entry in `deviceKeys`. */
+const entryFields = (fields) =>
+  Object.fromEntries(
+    Object.entries(fields).filter(([field]) =>
+      DEVICE_KEY_FIELDS.includes(field),
+    ),
+  );
 
 /** The slot of a booking a pass holds (unique, see the model's index). */
 const sameSlot = (a, b) =>
@@ -73,7 +102,8 @@ class MemoryAdmissionStore {
     this.passes = new Map();
     this.events = new Map();
     this.checks = new Map();
-    this.devices = new Map();
+    this.accessPoints = new Map();
+    this.admissionApps = new Map();
     this.facilities = new Map();
     this.bookables = new Map();
   }
@@ -83,8 +113,51 @@ class MemoryAdmissionStore {
     this.passes.set(`${pass.tenantId}:${pass.id}`, copy(pass));
   }
 
+  /** The admission application of a tenant, switched on by default. */
+  putAdmissionApp(tenantId, { active = true } = {}) {
+    const app = this.admissionApps.get(tenantId);
+    this.admissionApps.set(tenantId, {
+      ...ADMISSION_APP,
+      active,
+      deviceKeys: app?.deviceKeys ?? [],
+    });
+  }
+
+  /**
+   * A device as `registerDevice` answers it: its access point and, with a
+   * `keyHash`, its entry in the tenant's admission application, which is
+   * added (switched on) where the tenant has none.
+   */
   putDevice(device) {
-    this.devices.set(device.keyHash, copy(device));
+    if (!this.admissionApps.has(device.tenantId)) {
+      this.putAdmissionApp(device.tenantId);
+    }
+    this.accessPoints.set(`${device.tenantId}:${device.id}`, {
+      ...accessPointFieldsOf(device),
+    });
+    const app = this.admissionApps.get(device.tenantId);
+    app.deviceKeys = app.deviceKeys.filter(
+      (entry) => entry.accessPointId !== device.id,
+    );
+    if (device.keyHash) {
+      app.deviceKeys.push(deviceKeyEntryOf(copy(device)));
+    }
+  }
+
+  /** @private The devices of a tenant, all fields. */
+  _devicesOf(tenantId) {
+    const app = this.admissionApps.get(tenantId) ?? null;
+    const entries = new Map(
+      (app?.deviceKeys ?? []).map((entry) => [entry.accessPointId, entry]),
+    );
+    return [...this.accessPoints.values()]
+      .filter(
+        (point) =>
+          point.tenantId === tenantId && point.provider === ADMISSION_PROVIDER,
+      )
+      .map((point) =>
+        copy(deviceOf(point, entries.get(point.id) ?? null, app?.active)),
+      );
   }
 
   putFacility(facility) {
@@ -212,16 +285,15 @@ class MemoryAdmissionStore {
     Object.assign(check, copy(fields));
   }
 
-  async deviceByKeyHash(keyHash) {
-    return copy(this.devices.get(keyHash) ?? null);
+  async admissionApp(tenantId) {
+    return copy(this.admissionApps.get(tenantId) ?? null);
   }
 
-  async touchDevice(tenantId, deviceId, at) {
-    for (const device of this.devices.values()) {
-      if (device.tenantId === tenantId && device.id === deviceId) {
-        device.lastSeenAt = at;
-      }
-    }
+  async deviceByKeyHash(tenantId, keyHash) {
+    return (
+      this._devicesOf(tenantId).find((device) => device.keyHash === keyHash) ??
+      null
+    );
   }
 
   async facility(tenantId, facilityId) {
@@ -229,48 +301,66 @@ class MemoryAdmissionStore {
   }
 
   async devicesOf(tenantId, { facilityId } = {}) {
-    return [...this.devices.values()]
+    return this._devicesOf(tenantId)
       .filter(
         (device) =>
-          device.tenantId === tenantId &&
-          (facilityId === undefined || device.facilityId === facilityId),
+          facilityId === undefined || device.facilityId === facilityId,
       )
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map(copy);
+      .sort(byCreation);
   }
 
   async deviceById(tenantId, deviceId) {
-    const device = [...this.devices.values()].find(
-      (stored) => stored.tenantId === tenantId && stored.id === deviceId,
+    return (
+      this._devicesOf(tenantId).find((device) => device.id === deviceId) ?? null
     );
-    return copy(device ?? null);
   }
 
-  /** False where the id (in the tenant) or the key hash is taken. */
+  /**
+   * Stores a new device: its access point and its entry. False where the
+   * tenant has an access point of that id already.
+   *
+   * @throws {ConflictError} `admission_app_missing` without an admission
+   *   application to keep the key in
+   */
   async insertDevice(device) {
-    const taken =
-      this.devices.has(device.keyHash) ||
-      [...this.devices.values()].some(
-        (stored) =>
-          stored.tenantId === device.tenantId && stored.id === device.id,
-      );
-    if (taken) {
+    const app = this.admissionApps.get(device.tenantId);
+    if (!app) {
+      throw new ConflictError("admission_app_missing");
+    }
+    if (this.accessPoints.has(`${device.tenantId}:${device.id}`)) {
       return false;
     }
-    this.putDevice(device);
+    this.accessPoints.set(
+      `${device.tenantId}:${device.id}`,
+      accessPointFieldsOf(device),
+    );
+    app.deviceKeys.push(deviceKeyEntryOf(copy(device)));
     return true;
   }
 
-  /** The device with `fields` set, null where the tenant has no such device. */
+  /** Gives a device without a key its entry; false where it has one. */
+  async addDeviceKey(tenantId, entry) {
+    const app = this.admissionApps.get(tenantId);
+    if (!app) {
+      throw new ConflictError("admission_app_missing");
+    }
+    if (app.deviceKeys.some((e) => e.accessPointId === entry.accessPointId)) {
+      return false;
+    }
+    app.deviceKeys.push(copy(entryFields(entry)));
+    return true;
+  }
+
+  /** The device with `fields` set, null where it has no entry. */
   async updateDevice(tenantId, deviceId, fields) {
-    const device = await this.deviceById(tenantId, deviceId);
-    if (!device) {
+    const entry = this.admissionApps
+      .get(tenantId)
+      ?.deviceKeys.find((e) => e.accessPointId === deviceId);
+    if (!entry || !this.accessPoints.has(`${tenantId}:${deviceId}`)) {
       return null;
     }
-    this.devices.delete(device.keyHash);
-    const updated = { ...device, ...copy(fields) };
-    this.putDevice(updated);
-    return copy(updated);
+    Object.assign(entry, copy(entryFields(fields)));
+    return this.deviceById(tenantId, deviceId);
   }
 
   async facilitySettingsOf(tenantId) {
@@ -347,9 +437,10 @@ class MongoAdmissionStore {
         passes: "admissionPassModel",
         events: "admissionEventModel",
         checks: "admissionCheckModel",
-        devices: "admissionDeviceModel",
         facilities: "admissionFacilityModel",
         bookables: "bookableModel",
+        accessPoints: "accessPointModel",
+        tenants: "tenantModel",
       };
       this.models[name] = require(`../../data-managers/models/${files[name]}`);
     }
@@ -467,15 +558,67 @@ class MongoAdmissionStore {
     );
   }
 
-  async deviceByKeyHash(keyHash) {
-    return await this.model("devices").findOne({ keyHash }).lean();
+  /** @private The admission application of a tenant, null without one. */
+  async _admissionApp(tenantId) {
+    const tenant = await this.model("tenants")
+      .findOne({ id: tenantId })
+      .select("applications")
+      .lean();
+    return admissionAppOf(tenant);
   }
 
-  async touchDevice(tenantId, deviceId, at) {
-    await this.model("devices").updateOne(
-      { tenantId, id: deviceId },
-      { $set: { lastSeenAt: at } },
+  /**
+   * @private The tenant whose admission application has an entry that
+   * satisfies `entryCondition` (a condition on `deviceKeys`).
+   */
+  _tenantFilter(tenantId, entryCondition) {
+    return {
+      id: tenantId,
+      applications: {
+        $elemMatch: { ...ADMISSION_APP, deviceKeys: entryCondition },
+      },
+    };
+  }
+
+  /**
+   * @private Adds the entry of a device in one atomic update, unless the
+   * application has one for the device already. The entry passes the tenant
+   * model's encryption hook untouched, and concurrent tenant edits are not
+   * clobbered (as the Salto KS IQ activations).
+   *
+   * @returns {Promise<boolean>} Whether it was added
+   */
+  async _pushEntry(tenantId, entry) {
+    const result = await this.model("tenants").updateOne(
+      this._tenantFilter(tenantId, {
+        $not: { $elemMatch: { accessPointId: entry.accessPointId } },
+      }),
+      { $push: { "applications.$[app].deviceKeys": entry } },
+      { arrayFilters: [ADMISSION_APP_FILTER] },
     );
+    return result?.matchedCount > 0;
+  }
+
+  async admissionApp(tenantId) {
+    return await this._admissionApp(tenantId);
+  }
+
+  async deviceByKeyHash(tenantId, keyHash) {
+    const app = await this._admissionApp(tenantId);
+    const entry = (app?.deviceKeys ?? []).find(
+      (stored) => stored.keyHash === keyHash,
+    );
+    if (!entry) {
+      return null;
+    }
+    const point = await this.model("accessPoints")
+      .findOne({
+        tenantId,
+        id: entry.accessPointId,
+        provider: ADMISSION_PROVIDER,
+      })
+      .lean();
+    return point ? deviceOf(point, entry, app.active) : null;
   }
 
   /** The settings of the facility with the capacity of its bookable. */
@@ -503,42 +646,101 @@ class MongoAdmissionStore {
   }
 
   async devicesOf(tenantId, { facilityId } = {}) {
-    const filter =
-      facilityId === undefined ? { tenantId } : { tenantId, facilityId };
-    return await this.model("devices")
-      .find(filter)
-      .sort({ createdAt: 1 })
-      .lean();
+    const filter = { tenantId, provider: ADMISSION_PROVIDER };
+    if (facilityId !== undefined) {
+      filter["config.facilityId"] = facilityId;
+    }
+    const [app, points] = await Promise.all([
+      this._admissionApp(tenantId),
+      this.model("accessPoints").find(filter).lean(),
+    ]);
+    const entries = new Map(
+      (app?.deviceKeys ?? []).map((entry) => [entry.accessPointId, entry]),
+    );
+    return points
+      .map((point) =>
+        deviceOf(point, entries.get(point.id) ?? null, app?.active),
+      )
+      .sort(byCreation);
   }
 
   async deviceById(tenantId, deviceId) {
-    return await this.model("devices")
-      .findOne({ tenantId, id: deviceId })
-      .lean();
-  }
-
-  /** False where the id (in the tenant) or the key hash is taken. */
-  async insertDevice(device) {
-    try {
-      await this.model("devices").create(device);
-      return true;
-    } catch (err) {
-      if (err?.code === DUPLICATE_KEY) {
-        return false;
-      }
-      throw err;
+    const [app, point] = await Promise.all([
+      this._admissionApp(tenantId),
+      this.model("accessPoints")
+        .findOne({ tenantId, id: deviceId, provider: ADMISSION_PROVIDER })
+        .lean(),
+    ]);
+    if (!point) {
+      return null;
     }
+    const entry = (app?.deviceKeys ?? []).find(
+      (stored) => stored.accessPointId === deviceId,
+    );
+    return deviceOf(point, entry ?? null, app?.active);
   }
 
-  /** The device with `fields` set, null where the tenant has no such device. */
+  /**
+   * Stores a new device: its access point, then its entry. False where the
+   * tenant has an access point of that id already.
+   *
+   * @throws {ConflictError} `admission_app_missing` without an admission
+   *   application to keep the key in; the access point is removed again
+   */
+  async insertDevice(device) {
+    const points = this.model("accessPoints");
+    if (await points.exists({ tenantId: device.tenantId, id: device.id })) {
+      return false;
+    }
+    const { AccessPoint } = require("../../entities/access/access-point");
+    await points.create(
+      AccessPoint.create(accessPointFieldsOf(device)).toDocument(),
+    );
+    if (!(await this._pushEntry(device.tenantId, deviceKeyEntryOf(device)))) {
+      await points.deleteOne({ tenantId: device.tenantId, id: device.id });
+      throw new ConflictError("admission_app_missing");
+    }
+    return true;
+  }
+
+  /** Gives a device without a key its entry; false where it has one. */
+  async addDeviceKey(tenantId, entry) {
+    if (!(await this._admissionApp(tenantId))) {
+      throw new ConflictError("admission_app_missing");
+    }
+    return await this._pushEntry(tenantId, entryFields(entry));
+  }
+
+  /** The device with `fields` set, null where it has no entry. */
   async updateDevice(tenantId, deviceId, fields) {
-    return await this.model("devices")
-      .findOneAndUpdate(
-        { tenantId, id: deviceId },
-        { $set: fields },
-        { new: true },
-      )
-      .lean();
+    const path = "applications.$[app].deviceKeys.$[entry].";
+    const result = await this.model("tenants").updateOne(
+      this._tenantFilter(tenantId, {
+        $elemMatch: { accessPointId: deviceId },
+      }),
+      {
+        $set: Object.fromEntries(
+          Object.entries(entryFields(fields)).map(([field, value]) => [
+            `${path}${field}`,
+            value,
+          ]),
+        ),
+      },
+      {
+        arrayFilters: [
+          ADMISSION_APP_FILTER,
+          { "entry.accessPointId": deviceId },
+        ],
+        // The entries sit inside the untyped `applications` array, so the
+        // schema cannot cast a filter on their fields; in strict mode
+        // mongoose refuses the `entry` filter instead of passing it on.
+        strict: false,
+      },
+    );
+    if (!(result?.matchedCount > 0)) {
+      return null;
+    }
+    return await this.deviceById(tenantId, deviceId);
   }
 
   async facilitySettingsOf(tenantId) {

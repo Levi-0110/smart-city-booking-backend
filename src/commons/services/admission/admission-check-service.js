@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const bunyan = require("bunyan");
 
 const {
   decide,
@@ -17,12 +18,19 @@ const { applyEvent, ACTOR_SOURCES } = require("./admission-state");
 const { catchUp, MAX_ATTEMPTS } = require("./admission-log");
 const { DENIAL_REASONS } = require("./admission-reasons");
 const { CAPACITY_CHECK } = require("./admission-terms");
+const { ADMISSION_RESULT } = require("./admission-reasons");
+const { ADMISSION_PROVIDER } = require("./admission-app");
 const {
   BadRequestError,
   ConflictError,
   NotFoundError,
   ServiceUnavailableError,
 } = require("../../../errors/BaseError");
+
+const logger = bunyan.createLogger({
+  name: "admission-check-service.js",
+  level: process.env.LOG_LEVEL,
+});
 
 /** A check under way that has not answered for this long counts as dead. */
 const PENDING_TIMEOUT_MS = 10 * 1000;
@@ -42,7 +50,8 @@ const MIN_SECRET_LENGTH = 32;
  * resolves the scanned code, loads pass and facility, lets the pure
  * {@link decide} answer and writes the one effect of a granted entry or an
  * exit into the usage log. Every scan, refused or not, is kept in the check
- * log with the answer it got.
+ * log with the answer it got, and written to the access log of the access
+ * subsystem at the device's access point, where the audit export finds it.
  *
  * - A scan sent twice - a device that repeats a request after a timeout -
  *   carries the same `scanId` and gets the first answer again, without a
@@ -62,17 +71,21 @@ class AdmissionCheckService {
    *   at least 32 characters; `ADMISSION_CODE_SECRET` by default
    * @param {() => number} [options.now=Date.now]
    * @param {() => string} [options.newId] Ids of events and scans
+   * @param {{ log: Function }|null} [options.accessLog] The access log the
+   *   checks are written to (`AccessLogService`); none where null
    */
   constructor({
     store,
     secret = process.env.ADMISSION_CODE_SECRET,
     now = Date.now,
     newId = () => crypto.randomUUID(),
+    accessLog = null,
   }) {
     this.store = store;
     this.secret = secret;
     this.now = now;
     this.newId = newId;
+    this.accessLog = accessLog;
   }
 
   /**
@@ -152,7 +165,55 @@ class AdmissionCheckService {
       reason: decision.reason,
       answer,
     });
+    await this._logAccess({ tenantId, device, direction, pass, answer, begun });
     return answer;
+  }
+
+  /**
+   * Writes the check to the access log (`accessLogs`): one row at the
+   * device's access point, with the booking of the pass, `denied` and the
+   * reason for a refusal, `success` otherwise. A write that fails is logged
+   * and holds up nobody at the entrance; the check log has the answer
+   * either way.
+   *
+   * @private
+   */
+  async _logAccess({ tenantId, device, direction, pass, answer, begun }) {
+    if (!this.accessLog) {
+      return;
+    }
+    const denied = answer.result === ADMISSION_RESULT.DENIED;
+    try {
+      await this.accessLog.log({
+        tenantId,
+        bookingId: pass?.bookingId ?? null,
+        accessPointId: device.id,
+        accessPointType: "door",
+        provider: ADMISSION_PROVIDER,
+        action: "scan",
+        actor: { source: "system" },
+        result: denied ? "denied" : "success",
+        blockingReasons: denied ? [answer.reason] : [],
+        payload: {
+          admission: {
+            scanId: answer.scanId,
+            direction,
+            result: answer.result,
+            step: answer.step,
+            reason: answer.reason,
+            notices: (answer.notices ?? []).map((notice) => notice.code),
+            passId: pass?.id ?? null,
+            facilityId: device.facilityId,
+          },
+        },
+        errorMessage: denied ? answer.message : null,
+        timestamp: begun,
+      });
+    } catch (err) {
+      logger.error(
+        `${tenantId} -- admission check ${answer.scanId} not written to the access log: ${err.message}`,
+      );
+    }
   }
 
   /** @private */

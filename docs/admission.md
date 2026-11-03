@@ -2,7 +2,7 @@
 
 Admission management turns a booking of an entrance ticket into passes that are checked at the entrance of a facility, such as a public pool: season, day, quota, family and group tickets, and time-limited access for a group of people. German terms in the [glossary](../GLOSSARY.md#einlass).
 
-**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, device access, the check route `POST /api/:tenant/admission/checks`, the issuance of passes from the booking lifecycle, the administration of devices and facility settings, and the daily reset as a job of the scheduler, started with the API. Roles, views and the ticket PDF follow (see [Next steps](#next-steps)). The booking, approval and cancellation paths gain one recorded step each and are otherwise untouched; a booking without a tariff of admission skips it.
+**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, the check route `POST /api/:tenant/admission/checks`, the issuance of passes from the booking lifecycle, the administration of devices and facility settings, and the daily reset as a job of the scheduler, started with the API. The devices, their machine access and the audit trail run on the building blocks of the access subsystem: a device is an access point of the provider `admission`, its key is kept by the tenant's access application `admission`, and every check is a row of the access log (see [Devices and the machine access](#devices-and-the-machine-access)). Roles, views and the ticket PDF follow (see [Next steps](#next-steps)). The booking, approval and cancellation paths gain one recorded step each and are otherwise untouched; a booking without a tariff of admission skips it.
 
 ## Where it sits
 
@@ -16,9 +16,12 @@ Admission management turns a booking of an entrance ticket into passes that are 
    ▼
  Usage log                          entries, exits, resets, corrections with account and reason
 
- Device ── POST /api/:tenant/admission/checks (device key, bound to one facility)
+ Device (access point, provider "admission")
+   └─ POST /api/:tenant/admission/checks, token-authorized; key checked against
+      the tenant's access application "admission" (deviceKeys)
    └─► check service: reserve scan ─► read code ─► verify tag ─► look up pass
                       ─► catch up ─► decide() ─► append to usage log ─► answer
+                      ─► access log (accessLogs, audit export)
 
  Administration ── /api/:tenant/admission/devices, /facilities (session, rights)
  Scheduler ─────── job admission.reset every 5 min: day_reset, auto_exit
@@ -33,7 +36,8 @@ Admission management turns a booking of an entrance ticket into passes that are 
 | `services/admission/admission-reset.js`            | Daily reset and maximum stay as a plan for the scheduled job                                                       |
 | `services/admission/admission-reasons.js`          | Vocabulary and German texts of results, reasons, notices, void causes                                              |
 | `services/admission/admission-store.js`            | Passes, usage log, check log, devices, facility settings: MongoDB for the API, in memory for the tests             |
-| `services/admission/admission-check-service.js`    | The check of one scan: idempotent by `scanId`, one entry per pass under concurrent scans, check log                |
+| `services/admission/admission-check-service.js`    | The check of one scan: idempotent by `scanId`, one entry per pass under concurrent scans, check log, access log    |
+| `services/admission/admission-app.js`              | Where admission meets the access subsystem: provider, access application, device keys kept and redacted            |
 | `services/admission/admission-devices.js`          | Device keys, the device middleware (`Authorization: Device <key>`), block and renew                                |
 | `services/admission/admission-issuance.js`         | The passes a booking issues, one per person and booked unit; their restore and void with the booking               |
 | `services/admission/admission-log.js`              | A projection caught up with the usage log; an event appended at the next position, again where a device came first |
@@ -153,11 +157,12 @@ What a booking issues comes from the tariff as the booking holds it since its ch
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `admissionpasses`     | Pass: tenant, facility, tariff, booking, ticket, position, label, holder, code hash, retired hashes, encrypted identifier, terms, projection, `version` | `tenantId+id`, `tenantId+codeHash`, slot `tenantId+bookingId+tariffId+ticket+position` |
 | `admissionevents`     | Usage log: one event per position `seq` of a pass, with type, time, business day and actor                                                              | `tenantId+passId+seq`                                                                  |
-| `admissionchecks`     | Check log: every scan with device, direction, result, step, reason and the answer it got                                                                | `tenantId+scanId`                                                                      |
-| `admissiondevices`    | Devices: facility, name, key hash, status; created, blocked and renewed, each with time and account; last seen                                          | `tenantId+id`, `keyHash`                                                               |
+| `admissionchecks`     | Check log: every scan with device, direction, result, step, reason and the answer it got; it answers a repeated `scanId`                                | `tenantId+scanId`                                                                      |
 | `admissionfacilities` | Admission settings of a facility: reset time, time zone, maximum stay, exit scan, notice thresholds, reset mark                                         | `tenantId+facilityId`                                                                  |
 
 The capacity is the `amount` of the facility's bookable; a facility without admission settings answers `404 admission_facility_not_found`.
+
+The devices have no collection of their own: they are access points (`accesspoints`, provider `admission`), their keys entries of the tenant's access application (`tenants.applications`, `deviceKeys`), and their checks rows of the access log (`accesslogs`), each beside what the access subsystem keeps there.
 
 The usage log is the lock. An event is appended at position `version + 1` of its pass; of two devices that scan the same pass at the same moment only one can write that position, the other gets the duplicate key, reads the pass again and now sees it present. The projection on the pass follows in a second write, conditional on `version`. A process that dies between the two writes leaves the projection one event behind; the next check applies the events after `version` (or replays the whole log after an `undo_entry`) before it decides.
 
@@ -201,6 +206,7 @@ It carries no booking, payment or contact data. A refusal is a `200` with `resul
 | 400    | `invalid_code`, `invalid_scan_id`, `invalid_direction` | malformed request                                                    |
 | 401    | `device_key_missing`, `device_unknown`                 | no device key, or none of this tenant                                |
 | 403    | `device_blocked`                                       | device blocked by the administration                                 |
+| 403    | `admission_inactive`                                   | the tenant's access application `admission` is switched off          |
 | 404    | `admission_facility_not_found`                         | the device's facility has no admission settings                      |
 | 409    | `scan_in_progress`                                     | the same `scanId` is still being checked (younger than 10 s): retry  |
 | 409    | `admission_check_contended`                            | three attempts in a row lost the race for the pass: retry            |
@@ -209,9 +215,14 @@ It carries no booking, payment or contact data. A refusal is a `200` with `resul
 
 The same `scanId` sent again gets the first answer and enters nothing twice; a first attempt that died under way (pending for 10 s or more) is checked again under the same `scanId`.
 
-## Device access
+## Devices and the machine access
 
-A device is registered for one facility and gets a key `adm_` plus 32 random bytes (base64url), shown once; the platform keeps only its SHA-256. The key is no session: it opens nothing but the check of its facility, and only for its own tenant. A device can be blocked (`403`) or given a new key, which ends the old one, each on its own. Every check counts against the device's rate limit (`RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE`, default 120 per minute). The device's last contact is written at most once a minute.
+Admission adds no access procedure of its own; it uses the one the access subsystem has for its registered access applications and extends it to one key per device:
+
+- **Device = access point.** A device is an access point of the provider `admission` (registered in the provider registry, without capabilities: the platform never opens, closes or grants at it), a `door` in mode `authorization` with its facility in `config.facilityId`. It is listed, renamed and removed like every access point; one made in the access point administration gets its first key with a renewal.
+- **Access application `admission`.** The tenant switches admission on as it switches on a locking system: with the access application `admission` (`type: access`). Switched off, every device is answered `403 admission_inactive`. The application holds one entry per device in `deviceKeys`: access point, SHA-256 of the key, status, and who registered, blocked and renewed it when. The entries are backend-owned state like the Salto KS IQ activations: only the administration of admission writes them, a tenant update keeps what is stored, and no tenant answer carries them (`AccessAppLifecycleService`).
+- **Machine access.** The check route is token-authorized, as the webhooks of the access providers are; the device sends its key as `Authorization: Device <key>`, `adm_` plus 32 random bytes (base64url), shown once. The middleware looks the hash up in the tenant's application, so a key opens nothing but the check of its facility, and only for its own tenant. A device can be blocked (`403`) or given a new key, which ends the old one, each on its own. Every check counts against the device's rate limit (`RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE`, default 120 per minute).
+- **Access log and audit export.** Every check is also a row of the access log: action `scan`, provider `admission`, the device's access point, the booking of the pass, `success` or `denied` with the reason, and the scan, step and notices in `payload.admission`. The audit export of the access subsystem (CSV, PDF) therefore lists the entrance next to the doors, with each reason in words. A row that cannot be written is logged and holds up nobody at the entrance; the check log keeps the answer either way. When a device last checked is in the access log of its access point.
 
 ## Administration
 
@@ -222,7 +233,7 @@ Under `/api/:tenant/admission`, with a session. `admission.read` is whoever may 
 | `GET /devices?facilityId=`                   | `read`  | the devices of the tenant or of one facility, with status and history, never key or hash |
 | `POST /devices` `{ facilityId, name }`       | `write` | `201 { key, device }`: the key once, with `Cache-Control: no-store`                      |
 | `POST /devices/:deviceId/block` / `/unblock` | `write` | the device: blocked, its next check answers `403`; unblocked, the same key works again   |
-| `POST /devices/:deviceId/renew`              | `write` | `{ key, device }`: the old key ends at once, a blocked device stays blocked              |
+| `POST /devices/:deviceId/renew`              | `write` | `{ key, device }`: the old key ends at once, a blocked device stays blocked; first key   |
 | `GET /facilities`, `GET /facilities/:id`     | `read`  | the settings of the facilities, or of one (`404 admission_facility_not_found`)           |
 | `PUT /facilities/:facilityId`                | `write` | creates or replaces the settings of a bookable of the tenant (`404 bookable_not_found`)  |
 
@@ -236,7 +247,7 @@ Under `/api/:tenant/admission`, with a session. `admission.read` is whoever may 
 }
 ```
 
-A `PUT` replaces the settings whole: a missing field takes its default (`03:00`, `Europe/Berlin`, no maximum stay, no exit scan, thresholds 2 and 3); the reset mark `lastResetAt` is the reset job's alone. A device is registered only for a facility with settings. Refusals name the field: `400 invalid_settings`, `invalid_reset_time` (`HH:mm`), `invalid_zone` (IANA), `invalid_max_stay` (1 to 1440 minutes, or null), `invalid_exit_scan`, `invalid_warnings` (1 to 100, `params.field`), `invalid_facility_id`, `invalid_device_name` (1 to 80 characters); `404 admission_device_not_found` for a device the tenant does not have. Block and unblock can be sent twice; each change keeps its time and account.
+A `PUT` replaces the settings whole: a missing field takes its default (`03:00`, `Europe/Berlin`, no maximum stay, no exit scan, thresholds 2 and 3); the reset mark `lastResetAt` is the reset job's alone. A device is registered only for a facility with settings and in a tenant with the access application `admission` (`409 admission_app_missing`); its id is the id of its access point, and a device without a key yet has the status `no_key` (block and unblock answer `409 device_without_key`). Refusals name the field: `400 invalid_settings`, `invalid_reset_time` (`HH:mm`), `invalid_zone` (IANA), `invalid_max_stay` (1 to 1440 minutes, or null), `invalid_exit_scan`, `invalid_warnings` (1 to 100, `params.field`), `invalid_facility_id`, `invalid_device_name` (1 to 80 characters); `404 admission_device_not_found` for a device the tenant does not have. Block and unblock can be sent twice; each change keeps its time and account.
 
 ## Business day, daily reset, maximum stay
 
@@ -262,4 +273,4 @@ Every instance starts the scheduler with the API once the migrations have run (`
 
 ## Tests
 
-`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, and the filters the MongoDB store sends. The issuance: one pass per person and unit, nothing twice also under two runs at once, void and restore with the booking's cause, an amendment, a void of the administration that stays, the tariffs it cannot issue named, a void behind a device's entry; the lifecycle's steps per transition and per group member, and a failed issuance recorded. The administration: a key shown once and never listed, a block at once and the same key back, a renewal that ends the old key, nothing of another tenant, settings whole with defaults and every refused field; its routes over the API, with `Cache-Control: no-store`. The reset job: day reset and maximum stay in one run across tenants, nothing twice, an exit under way kept, a pass it cannot write failing the run, its run in the scheduler and its start with the API. The routes appear in the authorization snapshot: the check with `401` for every principal, the administration with its rights.
+`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, a switched-off application, and the filters and updates the MongoDB store sends to the access points and the tenant's application. The access subsystem: the provider registered without capabilities, a device a valid access point, the device keys kept through the application factory and a tenant update and never sent out, a check written once to the access log with its booking, an access log that cannot be written, and the reasons in words in the audit export. The issuance: one pass per person and unit, nothing twice also under two runs at once, void and restore with the booking's cause, an amendment, a void of the administration that stays, the tariffs it cannot issue named, a void behind a device's entry; the lifecycle's steps per transition and per group member, and a failed issuance recorded. The administration: a key shown once and never listed, a device stored as an access point, no device without the access application, the first key of an access point made elsewhere, a block at once and the same key back, a renewal that ends the old key, nothing of another tenant, settings whole with defaults and every refused field; its routes over the API, with `Cache-Control: no-store`. The reset job: day reset and maximum stay in one run across tenants, nothing twice, an exit under way kept, a pass it cannot write failing the run, its run in the scheduler and its start with the API. The routes appear in the authorization snapshot: the check with `401` for every principal, the administration with its rights.

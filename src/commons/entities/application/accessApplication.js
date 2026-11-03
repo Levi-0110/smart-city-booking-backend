@@ -251,7 +251,32 @@ class ParevaAccessApplication extends AccessApplication {
   }
 }
 
+/**
+ * The admission of a tenant (docs/admission.md): switched on like every
+ * access application, it lets the tenant's devices at the entrances check
+ * passes through its machine access. The devices are access points of the
+ * provider `admission`; their keys live here, in `deviceKeys`, one entry per
+ * device with the SHA-256 hash of its key and its status. The entries are
+ * backend-owned like the Salto KS IQ activations: written only by the
+ * administration of admission, restored on every tenant update and never
+ * sent out (`AccessAppLifecycleService`). A hash needs no encryption.
+ */
+class AdmissionAccessApplication extends AccessApplication {
+  constructor(params) {
+    super(params);
+    this.deviceKeys = Array.isArray(params.deviceKeys) ? params.deviceKeys : [];
+  }
+
+  static get Schema() {
+    return {
+      ...super.Schema,
+      deviceKeys: { type: Array, default: [] },
+    };
+  }
+}
+
 const accessAppTypes = {
+  admission: AdmissionAccessApplication,
   nuki: NukiAccessApplication,
   "salto-ks": SaltoKsAccessApplication,
   ifbs: IfbsAccessApplication,
@@ -269,6 +294,7 @@ function registerAccessAppType(id, AppClass) {
 
 module.exports = {
   AccessApplication,
+  AdmissionAccessApplication,
   NukiAccessApplication,
   SaltoKsAccessApplication,
   IfbsAccessApplication,

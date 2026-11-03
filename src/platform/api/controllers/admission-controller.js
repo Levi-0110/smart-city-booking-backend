@@ -10,9 +10,15 @@ const {
 const {
   AdmissionAdministrationService,
 } = require("../../../commons/services/admission/admission-administration");
+const AccessLogService = require("../../../commons/services/access/access-log-service");
 
 const store = new MongoAdmissionStore();
-const checks = new AdmissionCheckService({ store });
+// Every check is also a row of the access log, where the audit export of the
+// access subsystem reads it (Pos. 2.6, 7.3).
+const checks = new AdmissionCheckService({
+  store,
+  accessLog: AccessLogService,
+});
 const administration = new AdmissionAdministrationService({ store });
 
 /** Who acts in the administration, for the device's record. */
@@ -27,12 +33,14 @@ function sendWithKey(response, status, body) {
 }
 
 /**
- * The routes of admission. The devices at the entrances (Pos. 4.1 to 4.3)
- * authorize themselves with their key; the answer is the check's, for the
- * device to show and, later, for a turnstile to act on (Pos. 1.3). The
- * administration registers, blocks and renews the devices and keeps the
- * admission settings of the facilities (Pos. 4.2 to 4.4); who may do what is
- * the routes' (`admission.read`, `admission.write`).
+ * The routes of admission. The devices at the entrances (Pos. 4.1 to 4.3) are
+ * access points of the provider `admission` and authorize themselves with
+ * their key through the machine access of the tenant's access application
+ * `admission`; the answer is the check's, for the device to show and, later,
+ * for a turnstile to act on (Pos. 1.3). The administration registers, blocks
+ * and renews the devices and keeps the admission settings of the facilities
+ * (Pos. 4.2 to 4.4); who may do what is the routes' (`admission.read`,
+ * `admission.write`).
  */
 class AdmissionController {
   /** 401, 403 or 429 unless a device of this tenant may check. */

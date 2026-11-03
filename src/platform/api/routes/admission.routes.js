@@ -8,7 +8,9 @@ const AdmissionController = require("../controllers/admission-controller");
 
 // A device at the entrance authorizes itself with the key it was registered
 // with (`Authorization: Device <key>`), not with a session: the route is
-// token-authorized, the device middleware decides (Pos. 4.2).
+// token-authorized like the webhooks of the access providers, and the device
+// middleware checks the key against the tenant's access application
+// `admission` (Pos. 4.2).
 router.post(
   "/checks",
   tokenAuthorized(),
@@ -16,9 +18,10 @@ router.post(
   AdmissionController.check,
 );
 
-// The devices at the entrances: read by whoever may read bookables, as the
-// access points are; registered, blocked and renewed by the tenant owner. A
-// registration and a renewal answer the device's key, once.
+// The devices at the entrances, access points of the provider `admission`:
+// read by whoever may read bookables, as the access points are; registered,
+// blocked and renewed by the tenant owner. A registration and a renewal answer
+// the device's key, once.
 router.get(
   "/devices",
   authorize("admission", "read"),

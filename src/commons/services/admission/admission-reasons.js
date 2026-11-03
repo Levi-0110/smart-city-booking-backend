@@ -69,6 +69,29 @@ const STEP_OF_REASON = Object.freeze({
 });
 
 /**
+ * The denial reasons as the audit export of the access log names them
+ * (`AccessAuditService`): short noun phrases for a table cell, where the
+ * staff at the entrance reads whole sentences (`messageOf`).
+ */
+const ADMISSION_REASON_LABELS = Object.freeze({
+  [DENIAL_REASONS.CODE_UNREADABLE]: "Code nicht lesbar",
+  [DENIAL_REASONS.NOT_A_TICKET]: "Kein Ticket",
+  [DENIAL_REASONS.CODE_NOT_GENUINE]: "Code nicht echt",
+  [DENIAL_REASONS.CODE_UNKNOWN]: "Code unbekannt",
+  [DENIAL_REASONS.CODE_REPLACED]: "Code ersetzt",
+  [DENIAL_REASONS.OTHER_FACILITY]: "Andere Einrichtung",
+  [DENIAL_REASONS.BLOCKED]: "Berechtigung gesperrt",
+  [DENIAL_REASONS.VOIDED]: "Berechtigung ungültig",
+  [DENIAL_REASONS.NOT_YET_VALID]: "Noch nicht gültig",
+  [DENIAL_REASONS.EXPIRED]: "Abgelaufen",
+  [DENIAL_REASONS.SINGLE_ENTRY_USED]: "Einmaleintritt genutzt",
+  [DENIAL_REASONS.QUOTA_EXHAUSTED]: "Kontingent aufgebraucht",
+  [DENIAL_REASONS.ALREADY_PRESENT]: "Bereits eingecheckt",
+  [DENIAL_REASONS.LOCK_PERIOD]: "Sperrzeit",
+  [DENIAL_REASONS.CAPACITY_REACHED]: "Einrichtung voll",
+});
+
+/**
  * Why a pass became void (event `void`), as the check names it: the staff
  * can tell a guest whose booking was cancelled from one whose ticket was
  * replaced.
@@ -171,6 +194,7 @@ module.exports = {
   ADMISSION_RESULT,
   DENIAL_REASONS,
   STEP_OF_REASON,
+  ADMISSION_REASON_LABELS,
   ADMISSION_NOTICES,
   VOID_CAUSES,
   BOOKING_VOID_CAUSES,

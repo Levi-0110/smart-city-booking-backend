@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const RateLimiter = require("../rate-limit/rate-limiter");
 const { admissionChecksPerDevice } = require("../rate-limit/limits");
+const { DEVICE_STATUS } = require("./admission-app");
 const {
   UnauthorizedError,
   ForbiddenError,
@@ -9,24 +10,20 @@ const {
 } = require("../../../errors/BaseError");
 
 /**
- * Devices at the entrances (glossary "Einlassgerät", Pos. 4.2). A device is
- * registered by the administration for one facility and gets a key of 256
- * random bits, shown once; the platform keeps only its hash. The device sends
- * the key as `Authorization: Device <key>`; it is no session and opens
- * nothing but the check of its facility. Each device can be blocked or given
- * a new key on its own; every check is counted against the device's rate
- * limit.
+ * Devices at the entrances (glossary "Einlassgerät", Pos. 4.2) and the machine
+ * access they check through. A device is an access point of the provider
+ * `admission`, registered by the administration for one facility; it
+ * authorizes itself through the tenant's access application `admission`,
+ * which keeps the hash of its key (admission-app.js). The key has 256 random
+ * bits and is shown once. The device sends it as `Authorization: Device
+ * <key>` on a token-authorized route, as the access providers authorize
+ * their webhooks with the secret of their application; it is no session and
+ * opens nothing but the check of its facility. Each device can be blocked or
+ * given a new key on its own, the application switched off for all of them;
+ * every check is counted against the device's rate limit.
  */
 
 const DEVICE_KEY_PREFIX = "adm_";
-
-const DEVICE_STATUS = Object.freeze({
-  ACTIVE: "active",
-  BLOCKED: "blocked",
-});
-
-/** Seen-at is written at most this often per device. */
-const SEEN_INTERVAL_MS = 60 * 1000;
 
 const DEVICE_AUTHORIZATION = /^Device\s+(adm_[A-Za-z0-9_-]{43})$/;
 
@@ -81,7 +78,6 @@ function registerDevice({
       blockedBy: null,
       renewedAt: null,
       renewedBy: null,
-      lastSeenAt: null,
     },
   };
 }
@@ -101,25 +97,31 @@ function renewDeviceKey(device, now = Date.now()) {
 
 /**
  * The express middleware of the device routes: 401 without a valid device
- * key of this tenant, 403 for a blocked device, 429 beyond its rate limit.
- * Hands the device on as `req.admissionDevice`.
+ * key of this tenant, 403 for a blocked device or a tenant whose admission
+ * application is switched off, 429 beyond the device's rate limit. Hands the
+ * device on as `req.admissionDevice`.
  *
  * @param {Object} options
  * @param {Object} options.store An admission store (admission-store.js)
  * @param {{ consume: Function }} [options.limiter=RateLimiter]
- * @param {() => number} [options.now=Date.now]
  * @returns {import("express").RequestHandler}
  */
-function deviceAuth({ store, limiter = RateLimiter, now = Date.now }) {
+function deviceAuth({ store, limiter = RateLimiter }) {
   return async function admissionDeviceAuth(req, res, next) {
     try {
       const key = deviceKeyOf(req.get("authorization"));
       if (!key) {
         throw new UnauthorizedError("device_key_missing");
       }
-      const device = await store.deviceByKeyHash(keyHashOf(key));
-      if (!device || device.tenantId !== req.params.tenant) {
+      const device = await store.deviceByKeyHash(
+        req.params.tenant,
+        keyHashOf(key),
+      );
+      if (!device) {
         throw new UnauthorizedError("device_unknown");
+      }
+      if (!device.appActive) {
+        throw new ForbiddenError("admission_inactive");
       }
       if (device.status !== DEVICE_STATUS.ACTIVE) {
         throw new ForbiddenError("device_blocked");
@@ -129,11 +131,6 @@ function deviceAuth({ store, limiter = RateLimiter, now = Date.now }) {
         throw new TooManyRequestsError("too_many_checks", {
           retryAfterSeconds: limit.retryAfterSeconds,
         });
-      }
-
-      const at = now();
-      if (!(device.lastSeenAt > at - SEEN_INTERVAL_MS)) {
-        store.touchDevice(device.tenantId, device.id, at).catch(() => {});
       }
       req.admissionDevice = device;
       return next();

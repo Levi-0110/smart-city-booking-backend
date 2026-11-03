@@ -343,3 +343,92 @@ describe("admission check service", () => {
     expect(store.checks.size).to.equal(0);
   });
 });
+
+describe("admission check service: access log", () => {
+  /** A service whose access log keeps its rows, or fails every write. */
+  function withAccessLog({ fails = false } = {}) {
+    const rows = [];
+    const accessLog = {
+      async log(entry) {
+        if (fails) {
+          throw new Error("connection lost");
+        }
+        rows.push(entry);
+      },
+    };
+    const store = new MemoryAdmissionStore();
+    store.putFacility(FACILITY);
+    store.putPass(passFor(SEASON_ID, SEASON, { bookingId: "booking-1" }));
+    let ids = 0;
+    const service = new AdmissionCheckService({
+      store,
+      secret: SECRET,
+      now: () => at("2027-07-01T10:00"),
+      newId: () => `id-${++ids}`,
+      accessLog,
+    });
+    const check = (code, input = {}) =>
+      service.check({ tenantId: TENANT, device: GATE, code, ...input });
+    return { rows, store, check };
+  }
+
+  it("writes every check once, at the device's access point, with the booking of the pass", async () => {
+    const { rows, check } = withAccessLog();
+
+    await check(qr(SEASON_ID), { scanId: "scan-1" });
+    await check(qr(SEASON_ID), { scanId: "scan-1" });
+    await check(qr(SEASON_ID), { scanId: "scan-2" });
+    await check(qr(OTHER_ID), { scanId: "scan-3" });
+
+    expect(rows).to.have.length(3);
+    expect(rows[0]).to.deep.equal({
+      tenantId: TENANT,
+      bookingId: "booking-1",
+      accessPointId: "gate-1",
+      accessPointType: "door",
+      provider: "admission",
+      action: "scan",
+      actor: { source: "system" },
+      result: "success",
+      blockingReasons: [],
+      payload: {
+        admission: {
+          scanId: "scan-1",
+          direction: "entry",
+          result: R.GRANTED,
+          step: null,
+          reason: null,
+          notices: [],
+          passId: "pass-7KQ2",
+          facilityId: "freibad",
+        },
+      },
+      errorMessage: null,
+      timestamp: at("2027-07-01T10:00"),
+    });
+    expect(
+      rows
+        .slice(1)
+        .map((row) => [
+          row.result,
+          row.blockingReasons,
+          row.bookingId,
+          row.payload.admission.passId,
+        ]),
+    ).to.deep.equal([
+      ["denied", [D.ALREADY_PRESENT], "booking-1", "pass-7KQ2"],
+      ["denied", [D.CODE_UNKNOWN], null, null],
+    ]);
+    expect(rows[1].errorMessage).to.match(/^Bereits eingecheckt seit/);
+  });
+
+  it("lets the entrance go on when the access log cannot be written", async () => {
+    const { store, check } = withAccessLog({ fails: true });
+
+    const answer = await check(qr(SEASON_ID), { scanId: "scan-1" });
+
+    expect(answer.result).to.equal(R.GRANTED);
+    const log = await store.eventsAfter(TENANT, "pass-7KQ2", 0);
+    expect(log.map(({ type }) => type)).to.deep.equal([E.ENTRY]);
+  });
+});

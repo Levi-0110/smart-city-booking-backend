@@ -1,9 +1,10 @@
 /**
  * The administration of admission (docs/admission.md, "Administration"): the
- * devices at the entrances - registered with a key shown once, blocked and
- * unblocked, given a new key - and the admission settings of the facilities,
- * over the in-memory store and, for the devices, the device middleware of
- * the check route.
+ * devices at the entrances - access points of the provider `admission`,
+ * registered with a key shown once that the tenant's admission application
+ * keeps as a hash, blocked and unblocked, given a new key - and the admission
+ * settings of the facilities, over the in-memory store and, for the devices,
+ * the device middleware of the check route.
  */
 
 const { expect } = require("chai");
@@ -38,6 +39,7 @@ function setup() {
     zone: "Europe/Berlin",
   });
   store.putBookable({ tenantId: TENANT, id: "sauna", amount: 40 });
+  store.putAdmissionApp(TENANT);
   let ids = 0;
   const admin = new AdmissionAdministrationService({
     store,
@@ -52,7 +54,6 @@ function setup() {
     deviceAuth({
       store,
       limiter: { consume: async () => ({ allowed: true }) },
-      now: () => NOW,
     }),
     (req, res) => res.json({ device: req.admissionDevice.id }),
   );
@@ -98,7 +99,14 @@ describe("admission administration: devices", () => {
       blockedBy: null,
       renewedAt: null,
       renewedBy: null,
-      lastSeenAt: null,
+    });
+    expect(store.accessPoints.get(`${TENANT}:device-1`)).to.deep.include({
+      tenantId: TENANT,
+      type: "door",
+      provider: "admission",
+      label: "Drehkreuz Nord",
+      mode: "authorization",
+      config: { facilityId: "freibad" },
     });
     expect((await store.deviceById(TENANT, "device-1")).keyHash).to.equal(
       keyHashOf(key),
@@ -129,6 +137,65 @@ describe("admission administration: devices", () => {
     expect(
       await codeOf(admin.devices(TENANT, { facilityId: ["a", "b"] })),
     ).to.equal("400 invalid_facility_id");
+  });
+
+  it("refuses a device in a tenant without the admission application", async () => {
+    const { store, admin } = setup();
+    store.admissionApps.delete(TENANT);
+
+    expect(
+      await codeOf(
+        admin.registerDevice(TENANT, { facilityId: "freibad", name: "Kasse" }),
+      ),
+    ).to.equal("409 admission_app_missing");
+    expect(await admin.devices(TENANT)).to.deep.equal([]);
+  });
+
+  it("stops every device while the admission application is switched off", async () => {
+    const { store, admin, scan } = setup();
+    const { key } = await admin.registerDevice(TENANT, {
+      facilityId: "freibad",
+      name: "Kasse",
+    });
+
+    store.putAdmissionApp(TENANT, { active: false });
+    const whileOff = await scan(key);
+    store.putAdmissionApp(TENANT, { active: true });
+
+    expect(whileOff).to.equal("403 admission_inactive");
+    expect(await scan(key)).to.equal(200);
+  });
+
+  it("gives an access point of the provider made elsewhere its first key", async () => {
+    const { store, admin, scan } = setup();
+    store.accessPoints.set(`${TENANT}:gate-west`, {
+      id: "gate-west",
+      tenantId: TENANT,
+      type: "door",
+      provider: "admission",
+      label: "Einlass West",
+      config: { facilityId: "freibad" },
+    });
+
+    const [listed] = await admin.devices(TENANT);
+    const blockWithoutKey = await codeOf(
+      admin.blockDevice(TENANT, "gate-west"),
+    );
+    const { key, device } = await admin.renewDeviceKey(TENANT, "gate-west", {
+      userId: OWNER,
+    });
+
+    expect(listed).to.deep.include({ id: "gate-west", status: "no_key" });
+    expect(blockWithoutKey).to.equal("409 device_without_key");
+    expect(device).to.deep.include({
+      id: "gate-west",
+      name: "Einlass West",
+      status: "active",
+      createdAt: NOW,
+      createdBy: OWNER,
+      renewedAt: null,
+    });
+    expect(await scan(key)).to.equal(200);
   });
 
   it("blocks a device at once, leaves the others working and lets the same key back in", async () => {

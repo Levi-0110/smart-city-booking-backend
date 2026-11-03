@@ -6,18 +6,27 @@ const {
   registerDevice,
   renewDeviceKey,
 } = require("./admission-devices");
+const { deviceKeyEntryOf } = require("./admission-app");
 const { DEFAULT_WARNINGS } = require("./admission-check");
 const { FACILITY_DEFAULTS } = require("./admission-store");
-const { BadRequestError, NotFoundError } = require("../../../errors/BaseError");
+const {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+} = require("../../../errors/BaseError");
 
 /**
  * The administration of admission (Pos. 4.2 to 4.4, 6.1): the devices at the
  * entrances of a tenant and the admission settings of its facilities, behind
  * the administration's routes (`admission.read`, `admission.write`).
  *
- * - A device is registered for one facility that has admission settings.
- *   Its key is in the answer of the registration and of a renewal, once; the
- *   platform keeps only its hash, and no list or read shows it again.
+ * - A device is registered for one facility that has admission settings, in
+ *   a tenant that has the access application `admission`: it becomes an
+ *   access point of the provider `admission`, its key an entry of the
+ *   application (admission-app.js). The key is in the answer of the
+ *   registration and of a renewal, once; the platform keeps only its hash,
+ *   and no list or read shows it again. An access point of the provider made
+ *   elsewhere has no key until a renewal gives it its first.
  * - Blocking a device stops its checks at once (`403 device_blocked`) and
  *   leaves every other device working; unblocking lets the same key work
  *   again. A renewal gives the device a new key and ends the old one; a
@@ -47,7 +56,6 @@ const DEVICE_FIELDS = Object.freeze([
   "blockedBy",
   "renewedAt",
   "renewedBy",
-  "lastSeenAt",
 ]);
 
 /** A device as the administration sees it: everything but its key hash. */
@@ -195,12 +203,16 @@ class AdmissionAdministrationService {
    * @returns {Promise<{ key: string, device: Object }>} The key, shown once
    * @throws {BadRequestError} `invalid_facility_id`, `invalid_device_name`
    * @throws {NotFoundError} `admission_facility_not_found`
+   * @throws {ConflictError} `admission_app_missing`
    */
   async registerDevice(tenantId, input, { userId = null } = {}) {
     const facilityId = idFrom(input?.facilityId, "invalid_facility_id");
     const name = nameFrom(input?.name);
     if (!(await this.store.facilitySettings(tenantId, facilityId))) {
       throw new NotFoundError("admission_facility_not_found");
+    }
+    if (!(await this.store.admissionApp(tenantId))) {
+      throw new ConflictError("admission_app_missing");
     }
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       const { key, device } = registerDevice({
@@ -245,14 +257,19 @@ class AdmissionAdministrationService {
   }
 
   /**
-   * Gives a device a new key; the old one stops working with the save.
+   * Gives a device a new key; the old one stops working with the save. A
+   * device without a key gets its first one.
    *
    * @returns {Promise<{ key: string, device: Object }>} The key, shown once
    * @throws {NotFoundError} `admission_device_not_found`
+   * @throws {ConflictError} `admission_app_missing`
    */
   async renewDeviceKey(tenantId, deviceId, { userId = null } = {}) {
     const device = await this._device(tenantId, deviceId);
     const { key, device: renewed } = renewDeviceKey(device, this.now());
+    if (device.status === DEVICE_STATUS.NO_KEY) {
+      return this._firstKey(tenantId, renewed, key, userId);
+    }
     const saved = await this.store.updateDevice(tenantId, device.id, {
       keyHash: renewed.keyHash,
       renewedAt: renewed.renewedAt,
@@ -307,9 +324,27 @@ class AdmissionAdministrationService {
     return device;
   }
 
+  /** @private The first key of a device that had none. */
+  async _firstKey(tenantId, device, key, userId) {
+    const entry = deviceKeyEntryOf({
+      ...device,
+      status: DEVICE_STATUS.ACTIVE,
+      createdAt: device.renewedAt,
+      createdBy: userId,
+      renewedAt: null,
+    });
+    if (!(await this.store.addDeviceKey(tenantId, entry))) {
+      throw new ConflictError("device_key_exists");
+    }
+    return { key, device: deviceView(await this._device(tenantId, device.id)) };
+  }
+
   /** @private */
   async _setStatus(tenantId, deviceId, status, fields) {
     const device = await this._device(tenantId, deviceId);
+    if (device.status === DEVICE_STATUS.NO_KEY) {
+      throw new ConflictError("device_without_key");
+    }
     if (device.status === status) {
       return deviceView(device);
     }

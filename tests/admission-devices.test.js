@@ -33,7 +33,7 @@ function setup({ allowed = true } = {}) {
   const app = express();
   app.post(
     "/api/:tenant/admission/checks",
-    deviceAuth({ store, limiter, now: () => NOW }),
+    deviceAuth({ store, limiter }),
     (req, res) => res.json({ device: req.admissionDevice.id }),
   );
   app.use(errorHandler);
@@ -92,7 +92,7 @@ describe("admission devices", () => {
     expect(deviceKeyOf(undefined)).to.equal(null);
   });
 
-  it("lets a registered device of the tenant through and notes when it was seen", async () => {
+  it("lets a registered device of the tenant through, counted against its own limit", async () => {
     const { store, limiter, register, post } = setup();
     const key = register();
 
@@ -101,9 +101,32 @@ describe("admission devices", () => {
     expect(res.status).to.equal(200);
     expect(res.body).to.deep.equal({ device: "gate-1" });
     expect(limiter.calls[0].key).to.equal("admission:device:gate-1");
-    expect((await store.deviceByKeyHash(keyHashOf(key))).lastSeenAt).to.equal(
-      NOW,
-    );
+    // The device is an access point of the provider `admission`; the key's
+    // hash is an entry of the tenant's admission application.
+    expect(store.accessPoints.get(`${TENANT}:gate-1`)).to.deep.include({
+      provider: "admission",
+      label: "Kasse Nord",
+      config: { facilityId: "freibad" },
+    });
+    expect(
+      (await store.admissionApp(TENANT)).deviceKeys.map((entry) => [
+        entry.accessPointId,
+        entry.keyHash,
+      ]),
+    ).to.deep.equal([["gate-1", keyHashOf(key)]]);
+  });
+
+  it("refuses every device while the tenant's admission application is off", async () => {
+    const { store, register, post } = setup();
+    const key = register();
+    store.putAdmissionApp(TENANT, { active: false });
+
+    const res = await post(`Device ${key}`);
+
+    expect([res.status, res.body.code]).to.deep.equal([
+      403,
+      "admission_inactive",
+    ]);
   });
 
   it("refuses without a key, with a session token and with an unknown key", async () => {

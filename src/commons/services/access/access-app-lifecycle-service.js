@@ -7,7 +7,8 @@ class AccessAppLifecycleService {
   /**
    * Restores the backend-owned runtime state of access applications on a
    * tenant that is about to be stored - state the admin UI neither writes
-   * nor may drop. Today that is the Salto KS IQ activations.
+   * nor may drop: the Salto KS IQ activations and the device keys of
+   * admission.
    *
    * @param {Object|null} previousTenant The stored tenant
    * @param {Object} nextTenant The tenant about to be stored, mutated
@@ -15,10 +16,9 @@ class AccessAppLifecycleService {
    */
   static preserveBackendState(previousTenant, nextTenant) {
     const SaltoKsIqActivationService = require("./salto-ks-iq-activation-service");
-    return SaltoKsIqActivationService.preserveActivations(
-      previousTenant,
-      nextTenant,
-    );
+    const { preserveDeviceKeys } = require("../admission/admission-app");
+    SaltoKsIqActivationService.preserveActivations(previousTenant, nextTenant);
+    return preserveDeviceKeys(previousTenant, nextTenant);
   }
 
   /**
@@ -30,7 +30,9 @@ class AccessAppLifecycleService {
    */
   static redactBackendState(tenant) {
     const SaltoKsIqActivationService = require("./salto-ks-iq-activation-service");
-    return SaltoKsIqActivationService.redactActivations(tenant);
+    const { redactDeviceKeys } = require("../admission/admission-app");
+    SaltoKsIqActivationService.redactActivations(tenant);
+    return redactDeviceKeys(tenant);
   }
 
   /**

@@ -5,6 +5,7 @@ const TenantManager = require("../../data-managers/tenant-manager");
 const PdfService = require("../../pdf-service/pdf-service");
 const { ACCESS_BLOCKING_REASONS } = require("./access-blocking-reasons");
 const { OPEN_ACTIONS, OPEN_ACTION_ORIGINS } = require("./access-open-action");
+const { ADMISSION_REASON_LABELS } = require("../admission/admission-reasons");
 const { DOMAIN } = require("../authorization/reach");
 
 const logger = bunyan.createLogger({
@@ -206,7 +207,12 @@ class AccessAuditService {
    */
   static _formatReasons(reasons) {
     return (reasons || [])
-      .map((reason) => BLOCKING_REASON_LABELS[reason] || reason)
+      .map(
+        (reason) =>
+          BLOCKING_REASON_LABELS[reason] ||
+          ADMISSION_REASON_LABELS[reason] ||
+          reason,
+      )
       .join(", ");
   }
 

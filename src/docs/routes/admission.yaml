@@ -6,9 +6,13 @@
       - Admission
     summary: Check one scan at the entrance of a facility
     description: |
-      The route of the devices at the entrances (glossary „Einlassgerät“).
-      A device authorizes itself with the key it was registered with, not
-      with a session; it checks passes of its own facility only. Reads the
+      The route of the devices at the entrances (glossary „Einlassgerät“),
+      access points of the provider `admission`. Token-authorized like the
+      webhooks of the access providers: a device authorizes itself with the
+      key it was registered with, which the tenant's access application
+      `admission` keeps as a hash, not with a session; it checks passes of
+      its own facility only. Every check is also a row of the access log
+      (action `scan`, provider `admission`) and so in the audit export. Reads the
       code, verifies the QR tag, looks up the pass, decides in six steps
       (code, validity, usage, presence, lock period, capacity) and writes a
       granted entry or an exit into the usage log of the pass.
@@ -63,7 +67,7 @@
       "401":
         description: "`device_key_missing` or `device_unknown` (no device of this tenant)"
       "403":
-        description: "`device_blocked`"
+        description: "`device_blocked`, or `admission_inactive`: the tenant's access application `admission` is switched off"
       "404":
         description: "`admission_facility_not_found`: the device's facility has no admission settings"
       "409":
@@ -115,9 +119,10 @@
     summary: Register a device for a facility
     description: |
       Registers a device at the entrance of a facility with admission
-      settings and answers its key, once: the platform keeps only its
-      SHA-256. The answer is sent with `Cache-Control: no-store`. For the
-      tenant owner (`admission.write`).
+      settings: an access point of the provider `admission`, whose id is
+      the device's. Answers its key, once: the tenant's access application
+      `admission` keeps only its SHA-256. The answer is sent with
+      `Cache-Control: no-store`. For the tenant owner (`admission.write`).
     security:
       - bearerAuth: []
     parameters:
@@ -156,6 +161,8 @@
         description: Without `admission.write`
       "404":
         description: "`admission_facility_not_found`: the facility has no admission settings"
+      "409":
+        description: "`admission_app_missing`: the tenant has no access application `admission`"
 
 /api/{tenant}/admission/devices/{deviceId}/block:
   post:
@@ -184,6 +191,8 @@
         description: Without `admission.write`
       "404":
         description: "`admission_device_not_found`"
+      "409":
+        description: "`device_without_key`: the access point has no key yet; renew gives it its first"
 
 /api/{tenant}/admission/devices/{deviceId}/unblock:
   post:
@@ -211,6 +220,8 @@
         description: Without `admission.write`
       "404":
         description: "`admission_device_not_found`"
+      "409":
+        description: "`device_without_key`: the access point has no key yet; renew gives it its first"
 
 /api/{tenant}/admission/devices/{deviceId}/renew:
   post:
@@ -218,8 +229,9 @@
       - Admission
     summary: Give a device a new key
     description: |
-      The old key ends at once; a blocked device stays blocked. The new key
-      is answered once, with `Cache-Control: no-store`. For the tenant owner
+      The old key ends at once; a blocked device stays blocked. An access
+      point of the provider without a key gets its first. The new key is
+      answered once, with `Cache-Control: no-store`. For the tenant owner
       (`admission.write`).
     security:
       - bearerAuth: []
@@ -239,6 +251,8 @@
         description: Without `admission.write`
       "404":
         description: "`admission_device_not_found`"
+      "409":
+        description: "`admission_app_missing`, or `device_key_exists`: a first key was given at the same moment"
 
 /api/{tenant}/admission/facilities:
   get:
@@ -356,8 +370,9 @@ components:
       name: Authorization
       description: |
         `Device <key>`: the key a device got at its registration, `adm_`
-        and 43 symbols of base64url. Shown once; the platform keeps only its
-        SHA-256. Not a session and not a bearer token.
+        and 43 symbols of base64url. Shown once; the tenant's access
+        application `admission` keeps only its SHA-256. Not a session and
+        not a bearer token.
   schemas:
     AdmissionCheckRequest:
       type: object
@@ -448,7 +463,8 @@ components:
           type: string
         status:
           type: string
-          enum: [active, blocked]
+          enum: [active, blocked, no_key]
+          description: "`no_key`: an access point of the provider that has no key yet"
         createdAt:
           type: integer
           description: Epoch milliseconds
@@ -467,10 +483,6 @@ components:
         renewedBy:
           type: string
           nullable: true
-        lastSeenAt:
-          type: integer
-          nullable: true
-          description: Last check, written at most once a minute
     AdmissionDeviceWithKey:
       type: object
       properties:

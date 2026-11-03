@@ -93,7 +93,7 @@ _Avoid_: usedBy (als Feld — existiert nicht), Rückreferenz, Usage-Index
 ### Zugang
 
 **AccessPoint**:
-Ein physischer Zugangspunkt, den die Plattform über einen Provider (z.B. NUKI, Salto, iFBS, Pareva) einer Buchung zuordnet: eine Tür (geteilt, fest konfiguriert) oder eine Schließfachanlage (exklusiv, je Buchung ein Fach zugeteilt). Ein AccessPoint ohne Bedien-Capability ist zulässig — die Plattform muss ihn nicht öffnen können.
+Ein physischer Zugangspunkt, den die Plattform über einen Provider (z.B. NUKI, Salto, iFBS, Pareva) einer Buchung zuordnet: eine Tür (geteilt, fest konfiguriert) oder eine Schließfachanlage (exklusiv, je Buchung ein Fach zugeteilt). Ein AccessPoint ohne Bedien-Capability ist zulässig — die Plattform muss ihn nicht öffnen können; so ist auch ein Einlassgerät ein AccessPoint (Anbieter `admission`).
 _Avoid_: Tür (als Entity-Name), Door, Schloss, Lock, Locker
 
 **Schließfachanlage**:
@@ -254,8 +254,8 @@ Die eine Prüfung, die ein Scan auslöst: sechs Schritte in fester Reihenfolge (
 _Avoid_: Zugangsentscheidung (das ist die Tür), Validierung
 
 **Einlassgerät**:
-Ein Gerät am Eingang einer Einrichtung, das Zugangskennungen liest und die Einlassprüfung anfragt: Handscanner, Tablet, Kassenplatz, später ein Drehkreuz. Von der Verwaltung für genau eine Einrichtung angemeldet; es weist sich mit einem Geräteschlüssel aus, nicht mit einer Sitzung. Der Schlüssel wird bei der Anmeldung und bei jeder Erneuerung einmal angezeigt; gespeichert ist nur sein Hash. Sperren wirkt beim nächsten Scan, Erneuern beendet den alten Schlüssel sofort.
-_Avoid_: AccessPoint (das ist die Tür, das Schloss oder das Schließfach), Scanner (das ist nur die Hardware), Terminal
+Ein Gerät am Eingang einer Einrichtung, das Zugangskennungen liest und die Einlassprüfung anfragt: Handscanner, Tablet, Kassenplatz, später ein Drehkreuz. In der Plattform ein AccessPoint des Anbieters `admission`, von der Verwaltung für genau eine Einrichtung angemeldet; die Plattform öffnet ihn nie, das Gerät fragt sie. Es weist sich über den Maschinenzugang der Anbindung „Einlass“ (Zugangsanwendung `admission` des Mandanten) mit einem Geräteschlüssel aus, nicht mit einer Sitzung. Der Schlüssel wird bei der Anmeldung und bei jeder Erneuerung einmal angezeigt; gespeichert ist nur sein Hash, in der Anbindung. Sperren wirkt beim nächsten Scan, Erneuern beendet den alten Schlüssel sofort, eine abgeschaltete Anbindung sperrt alle Geräte. Jede Prüfung steht im Zugangsprotokoll des AccessPoints.
+_Avoid_: Scanner (das ist nur die Hardware), Terminal
 
 **Nutzungsprotokoll**:
 Die Ereignisse einer Zugangsberechtigung in ihrer Reihenfolge: Ein- und Austritte, automatische Austritte, Tagesresets und jeder Eingriff der Verwaltung mit Konto und Begründung. Aus ihm ist der Zustand jederzeit herleitbar; eine Rücknahme löscht nichts, sie wird selbst ein Ereignis.

@@ -36,14 +36,16 @@ describe("admission store in MongoDB", () => {
       findOneAndUpdate: sandbox.stub().returns(query(null)),
       exists: sandbox.stub().resolves(null),
       countDocuments: sandbox.stub().resolves(0),
+      deleteOne: sandbox.stub().resolves({ deletedCount: 1 }),
     });
     models = {
       passes: model(),
       events: model(),
       checks: model(),
-      devices: model(),
       facilities: model(),
       bookables: model(),
+      accessPoints: model(),
+      tenants: model(),
     };
     store = new MongoAdmissionStore(models);
   });
@@ -180,39 +182,188 @@ describe("admission store in MongoDB", () => {
     });
   });
 
-  it("lists and changes the devices of one tenant and refuses a taken key", async () => {
-    models.devices.create
-      .onSecondCall()
-      .rejects(Object.assign(new Error("E11000"), { code: 11000 }));
-    models.devices.findOneAndUpdate
-      .onFirstCall()
-      .returns(query({ id: "device-1", status: "blocked" }));
+  describe("devices: access points of the provider admission", () => {
+    const APP_FILTER = { "app.type": "access", "app.id": "admission" };
+    const ENTRY = Object.freeze({
+      accessPointId: "gate-1",
+      keyHash: "hash-1",
+      status: "active",
+      createdAt: 1,
+      createdBy: "owner-1",
+      blockedAt: null,
+      blockedBy: null,
+      renewedAt: null,
+      renewedBy: null,
+    });
+    const POINT = Object.freeze({
+      id: "gate-1",
+      tenantId: TENANT,
+      type: "door",
+      provider: "admission",
+      label: "Kasse",
+      config: { facilityId: "freibad" },
+    });
+    const tenantWith = (app) => ({
+      id: TENANT,
+      applications: [{ type: "access", id: "nuki", active: true }, app],
+    });
 
-    await store.devicesOf(TENANT);
-    await store.devicesOf(TENANT, { facilityId: "freibad" });
-    const inserted = [
-      await store.insertDevice({ id: "device-1" }),
-      await store.insertDevice({ id: "device-1" }),
-    ];
-    const changed = [
-      await store.updateDevice(TENANT, "device-1", { status: "blocked" }),
-      await store.updateDevice(TENANT, "unknown", { status: "blocked" }),
-    ];
+    it("joins the devices of a tenant from its access points and its admission application", async () => {
+      models.tenants.findOne.returns(
+        query(
+          tenantWith({
+            type: "access",
+            id: "admission",
+            active: true,
+            deviceKeys: [ENTRY],
+          }),
+        ),
+      );
+      models.accessPoints.find.returns(
+        query([{ ...POINT, id: "gate-2", label: "West" }, POINT]),
+      );
+      models.accessPoints.findOne.returns(query(POINT));
 
-    expect(models.devices.find.args.map(([filter]) => filter)).to.deep.equal([
-      { tenantId: TENANT },
-      { tenantId: TENANT, facilityId: "freibad" },
-    ]);
-    expect(inserted).to.deep.equal([true, false]);
-    expect(changed).to.deep.equal([
-      { id: "device-1", status: "blocked" },
-      null,
-    ]);
-    expect(models.devices.findOneAndUpdate.firstCall.args).to.deep.equal([
-      { tenantId: TENANT, id: "device-1" },
-      { $set: { status: "blocked" } },
-      { new: true },
-    ]);
+      const listed = await store.devicesOf(TENANT, { facilityId: "freibad" });
+      const byKey = await store.deviceByKeyHash(TENANT, "hash-1");
+      const unknown = await store.deviceByKeyHash(TENANT, "hash-x");
+
+      expect(models.tenants.findOne.firstCall.args[0]).to.deep.equal({
+        id: TENANT,
+      });
+      expect(models.accessPoints.find.firstCall.args[0]).to.deep.equal({
+        tenantId: TENANT,
+        provider: "admission",
+        "config.facilityId": "freibad",
+      });
+      expect(
+        listed.map((device) => [device.id, device.status, device.createdAt]),
+      ).to.deep.equal([
+        ["gate-1", "active", 1],
+        ["gate-2", "no_key", null],
+      ]);
+      expect(byKey).to.deep.include({
+        id: "gate-1",
+        facilityId: "freibad",
+        name: "Kasse",
+        keyHash: "hash-1",
+        status: "active",
+        appActive: true,
+      });
+      expect(models.accessPoints.findOne.firstCall.args[0]).to.deep.equal({
+        tenantId: TENANT,
+        id: "gate-1",
+        provider: "admission",
+      });
+      expect(unknown).to.equal(null);
+    });
+
+    it("stores a new device as an access point and an entry of the application, once", async () => {
+      models.accessPoints.exists.onSecondCall().resolves({ _id: "taken" });
+      const device = {
+        ...ENTRY,
+        id: "gate-1",
+        tenantId: TENANT,
+        facilityId: "freibad",
+        name: "Kasse",
+      };
+      delete device.accessPointId;
+
+      const inserted = [
+        await store.insertDevice(device),
+        await store.insertDevice(device),
+      ];
+
+      expect(inserted).to.deep.equal([true, false]);
+      const [point] = models.accessPoints.create.firstCall.args;
+      expect(point).to.deep.include({
+        id: "gate-1",
+        tenantId: TENANT,
+        type: "door",
+        provider: "admission",
+        label: "Kasse",
+        mode: "authorization",
+        config: { facilityId: "freibad" },
+        validationRules: [],
+      });
+      expect(point.scanCode).to.be.a("string");
+      expect(models.tenants.updateOne.firstCall.args).to.deep.equal([
+        {
+          id: TENANT,
+          applications: {
+            $elemMatch: {
+              type: "access",
+              id: "admission",
+              deviceKeys: {
+                $not: { $elemMatch: { accessPointId: "gate-1" } },
+              },
+            },
+          },
+        },
+        { $push: { "applications.$[app].deviceKeys": { ...ENTRY } } },
+        { arrayFilters: [APP_FILTER] },
+      ]);
+    });
+
+    it("takes the access point back where the tenant has no admission application", async () => {
+      models.tenants.updateOne.resolves({ matchedCount: 0 });
+
+      let refused;
+      try {
+        await store.insertDevice({
+          ...ENTRY,
+          id: "gate-1",
+          tenantId: TENANT,
+          facilityId: "freibad",
+          name: "Kasse",
+        });
+      } catch (err) {
+        refused = `${err.statusCode} ${err.code}`;
+      }
+
+      expect(refused).to.equal("409 admission_app_missing");
+      expect(models.accessPoints.deleteOne.firstCall.args[0]).to.deep.equal({
+        tenantId: TENANT,
+        id: "gate-1",
+      });
+    });
+
+    it("changes only the fields of the device's entry, and nothing for a device without one", async () => {
+      models.tenants.updateOne.onSecondCall().resolves({ matchedCount: 0 });
+
+      await store.updateDevice(TENANT, "gate-1", {
+        status: "blocked",
+        blockedAt: 2,
+        name: "Kasse Süd",
+      });
+      const missing = await store.updateDevice(TENANT, "gate-9", {
+        status: "blocked",
+      });
+
+      expect(models.tenants.updateOne.firstCall.args).to.deep.equal([
+        {
+          id: TENANT,
+          applications: {
+            $elemMatch: {
+              type: "access",
+              id: "admission",
+              deviceKeys: { $elemMatch: { accessPointId: "gate-1" } },
+            },
+          },
+        },
+        {
+          $set: {
+            "applications.$[app].deviceKeys.$[entry].status": "blocked",
+            "applications.$[app].deviceKeys.$[entry].blockedAt": 2,
+          },
+        },
+        {
+          arrayFilters: [APP_FILTER, { "entry.accessPointId": "gate-1" }],
+          strict: false,
+        },
+      ]);
+      expect(missing).to.equal(null);
+    });
   });
 
   it("creates or replaces the settings of a facility and moves its reset mark only forward", async () => {
