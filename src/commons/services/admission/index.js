@@ -6,14 +6,16 @@
  * - `code`: the access identifier and the QR payload of a ticket.
  * - `state`: usage log, projection and state of a pass.
  * - `check`: the admission check in its six steps.
+ * - `reset`: the daily reset and the maximum stay, as a plan for the job.
  * - `reasons`: the vocabulary and the German texts of the results.
  *
- * All five are pure; storage, devices and routes build on them.
+ * All six are pure; storage, devices and routes build on them.
  */
 module.exports = {
   terms: require("./admission-terms"),
   code: require("./admission-code"),
   state: require("./admission-state"),
   check: require("./admission-check"),
+  reset: require("./admission-reset"),
   reasons: require("./admission-reasons"),
 };
