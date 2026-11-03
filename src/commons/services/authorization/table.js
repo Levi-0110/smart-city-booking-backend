@@ -187,6 +187,16 @@ const TABLE = {
     export: { any: "manageBookings.readAny" },
   },
 
+  // Admission (docs/admission.md): the devices at the entrances (glossary
+  // „Einlassgerät“) and the admission settings of the facilities. Reading
+  // is the bookable reader's, as for the access points; registering,
+  // blocking and renewing a device and changing the settings are the tenant
+  // owner's until the admission role exists.
+  admission: {
+    read: { any: "manageBookables.readAny" },
+    write: { any: "tenantOwner" },
+  },
+
   dashboard: {
     read: { any: "manageBookings.readAny" },
   },

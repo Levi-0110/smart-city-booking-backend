@@ -33,6 +33,8 @@ describe("admission store in MongoDB", () => {
       updateOne: sandbox.stub().resolves({ matchedCount: 1 }),
       findOne: sandbox.stub().returns(query(null)),
       find: sandbox.stub().returns(query([])),
+      findOneAndUpdate: sandbox.stub().returns(query(null)),
+      exists: sandbox.stub().resolves(null),
       countDocuments: sandbox.stub().resolves(0),
     });
     models = {
@@ -175,6 +177,97 @@ describe("admission store in MongoDB", () => {
     expect(models.passes.findOne.secondCall.args[0]).to.deep.equal({
       tenantId: TENANT,
       retiredCodeHashes: "h-old",
+    });
+  });
+
+  it("lists and changes the devices of one tenant and refuses a taken key", async () => {
+    models.devices.create
+      .onSecondCall()
+      .rejects(Object.assign(new Error("E11000"), { code: 11000 }));
+    models.devices.findOneAndUpdate
+      .onFirstCall()
+      .returns(query({ id: "device-1", status: "blocked" }));
+
+    await store.devicesOf(TENANT);
+    await store.devicesOf(TENANT, { facilityId: "freibad" });
+    const inserted = [
+      await store.insertDevice({ id: "device-1" }),
+      await store.insertDevice({ id: "device-1" }),
+    ];
+    const changed = [
+      await store.updateDevice(TENANT, "device-1", { status: "blocked" }),
+      await store.updateDevice(TENANT, "unknown", { status: "blocked" }),
+    ];
+
+    expect(models.devices.find.args.map(([filter]) => filter)).to.deep.equal([
+      { tenantId: TENANT },
+      { tenantId: TENANT, facilityId: "freibad" },
+    ]);
+    expect(inserted).to.deep.equal([true, false]);
+    expect(changed).to.deep.equal([
+      { id: "device-1", status: "blocked" },
+      null,
+    ]);
+    expect(models.devices.findOneAndUpdate.firstCall.args).to.deep.equal([
+      { tenantId: TENANT, id: "device-1" },
+      { $set: { status: "blocked" } },
+      { new: true },
+    ]);
+  });
+
+  it("creates or replaces the settings of a facility and moves its reset mark only forward", async () => {
+    const settings = {
+      resetTime: "06:00",
+      zone: ZONE,
+      maxStayMinutes: 180,
+      exitScan: true,
+      warnings: null,
+    };
+    models.facilities.findOneAndUpdate.returns(
+      query({ _id: "x", tenantId: TENANT, facilityId: "sauna", ...settings }),
+    );
+    models.bookables.exists.onSecondCall().resolves({ _id: "y" });
+
+    const saved = await store.saveFacilitySettings(TENANT, "sauna", settings);
+    await store.markReset(TENANT, "sauna", at("2027-07-02T06:00"));
+
+    expect(saved).to.deep.equal({
+      tenantId: TENANT,
+      facilityId: "sauna",
+      ...settings,
+      lastResetAt: null,
+    });
+    expect(models.facilities.findOneAndUpdate.firstCall.args).to.deep.equal([
+      { tenantId: TENANT, facilityId: "sauna" },
+      { $set: settings },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    ]);
+    expect(models.facilities.updateOne.firstCall.args).to.deep.equal([
+      { tenantId: TENANT, facilityId: "sauna" },
+      { $max: { lastResetAt: at("2027-07-02T06:00") } },
+    ]);
+    expect([
+      await store.bookableExists(TENANT, "unknown"),
+      await store.bookableExists(TENANT, "sauna"),
+    ]).to.deep.equal([false, true]);
+    expect(models.bookables.exists.secondCall.args[0]).to.deep.equal({
+      tenantId: TENANT,
+      id: "sauna",
+    });
+  });
+
+  it("finds the open presences of a facility for the daily reset", async () => {
+    models.passes.find.returns(
+      query([{ id: "pass-1", projection: { presentSince: 5 } }]),
+    );
+
+    expect(await store.openPresences(TENANT, "freibad")).to.deep.equal([
+      { passId: "pass-1", presentSince: 5 },
+    ]);
+    expect(models.passes.find.firstCall.args[0]).to.deep.equal({
+      tenantId: TENANT,
+      facilityId: "freibad",
+      "projection.presentSince": { $ne: null },
     });
   });
 });

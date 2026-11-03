@@ -76,6 +76,10 @@ const { User } = require("../../src/commons/entities/user/user");
 const { Role } = require("../../src/commons/entities/role/role");
 const Tenant = require("../../src/commons/entities/tenant/tenant");
 const storage = require("../../src/commons/services/storage");
+const {
+  MemoryAdmissionStore,
+  MongoAdmissionStore,
+} = require("../../src/commons/services/admission/admission-store");
 const ExternalPriceService = require("../../src/commons/services/external-price-service");
 const {
   ownCondition,
@@ -751,6 +755,29 @@ function installRouteWorld({
       populateTasksWithBookings: async () => [],
     },
   });
+
+  // Admission keeps its own store over the MongoDB models; the routes get one
+  // in memory with the fixture facility's settings and the fixture device.
+  const admission = new MemoryAdmissionStore();
+  admission.putFacility({ tenantId, id: FIXTURE_ID, capacity: 100 });
+  admission.putDevice({
+    id: FIXTURE_ID,
+    tenantId,
+    facilityId: FIXTURE_ID,
+    name: "Kasse",
+    keyHash: FIXTURE_ID,
+    status: "active",
+    createdAt: 0,
+  });
+  for (const name of Object.getOwnPropertyNames(
+    MongoAdmissionStore.prototype,
+  )) {
+    if (name !== "constructor" && name !== "model") {
+      sinon
+        .stub(MongoAdmissionStore.prototype, name)
+        .callsFake((...args) => admission[name](...args));
+    }
+  }
 }
 
 module.exports = { installRouteWorld, offerReads, FIXTURE_ID };

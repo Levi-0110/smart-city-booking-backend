@@ -14,7 +14,11 @@ const admissionDeviceSchemaDefinition = {
   status: { type: String, default: "active" },
   createdAt: { type: Number, required: true },
   createdBy: { type: String, default: null },
+  /** When and by whom the device was blocked; null while it is active. */
+  blockedAt: { type: Number, default: null },
+  blockedBy: { type: String, default: null },
   renewedAt: { type: Number, default: null },
+  renewedBy: { type: String, default: null },
   lastSeenAt: { type: Number, default: null },
 };
 

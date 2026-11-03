@@ -15,6 +15,9 @@ const {
 } = require("./commons/utilities/migration-state");
 const seed = require("../seeder/seeder");
 const RuleEngine = require("./rule-engine/ruleEngine");
+const {
+  startPlatformScheduler,
+} = require("./commons/services/scheduler/platform-scheduler");
 const { requestLogger } = require("./middleware/logger.js");
 const lazyBrowser = require("./commons/pdf-service/LazyBrowser");
 const { errorHandler } = require("./middleware/error-handler");
@@ -164,6 +167,7 @@ require("./commons/services/checkout/providers/register");
 require("./commons/services/access/providers/register-access-providers");
 
 let server;
+let scheduler = null;
 
 dbm.connect().then(() => {
   const port = process.env.PORT;
@@ -176,6 +180,9 @@ dbm.connect().then(() => {
       // Not migrating is not an error: the legacy resolver route keeps serving
       // the old tree until the media CLI has run (§4.10).
       await warnIfImportPending();
+      // The platform's jobs (the daily reset of admission) start once the
+      // migrations have run; SCHEDULER_ENABLED=false keeps this instance out.
+      scheduler = startPlatformScheduler();
       if (process.env.RULE_ENGINE_ENABLED === "true") {
         await RuleEngine.initEngine();
       }
@@ -206,6 +213,11 @@ async function gracefulShutdown(signal) {
           resolve();
         });
       });
+    }
+
+    if (scheduler) {
+      logger.info("Stopping the scheduler...");
+      await scheduler.stop();
     }
 
     logger.info("Closing browser instance...");

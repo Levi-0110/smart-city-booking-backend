@@ -253,6 +253,10 @@ _Avoid_: Scan-Code (das ist der Code am AccessPoint), Buchungsnummer, Ticketnumm
 Die eine Prüfung, die ein Scan auslöst: sechs Schritte in fester Reihenfolge (Code, Gültigkeit, Nutzungsart, Anwesenheit, Sperrzeit, Kapazität). Der erste verweigernde Schritt nennt den Grund. Nur ein gewährter Eintritt oder ein Austritt ändert Zustand und Nutzungsprotokoll.
 _Avoid_: Zugangsentscheidung (das ist die Tür), Validierung
 
+**Einlassgerät**:
+Ein Gerät am Eingang einer Einrichtung, das Zugangskennungen liest und die Einlassprüfung anfragt: Handscanner, Tablet, Kassenplatz, später ein Drehkreuz. Von der Verwaltung für genau eine Einrichtung angemeldet; es weist sich mit einem Geräteschlüssel aus, nicht mit einer Sitzung. Der Schlüssel wird bei der Anmeldung und bei jeder Erneuerung einmal angezeigt; gespeichert ist nur sein Hash. Sperren wirkt beim nächsten Scan, Erneuern beendet den alten Schlüssel sofort.
+_Avoid_: AccessPoint (das ist die Tür, das Schloss oder das Schließfach), Scanner (das ist nur die Hardware), Terminal
+
 **Nutzungsprotokoll**:
 Die Ereignisse einer Zugangsberechtigung in ihrer Reihenfolge: Ein- und Austritte, automatische Austritte, Tagesresets und jeder Eingriff der Verwaltung mit Konto und Begründung. Aus ihm ist der Zustand jederzeit herleitbar; eine Rücknahme löscht nichts, sie wird selbst ein Ereignis.
 _Avoid_: Prüfprotokoll (das hält auch verweigerte Scans fest), Audit-Log

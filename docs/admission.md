@@ -2,7 +2,7 @@
 
 Admission management turns a booking of an entrance ticket into passes that are checked at the entrance of a facility, such as a public pool: season, day, quota, family and group tickets, and time-limited access for a group of people. German terms in the [glossary](../GLOSSARY.md#einlass).
 
-**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, device access, the check route `POST /api/:tenant/admission/checks` and the issuance of passes from the booking lifecycle. The route is mounted, but no device can be registered yet, so it answers `401` to every caller. The registration of devices by the administration and the reset job at startup follow (see [Next steps](#next-steps)). The booking, approval and cancellation paths gain one recorded step each and are otherwise untouched; a booking without a tariff of admission skips it.
+**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, device access, the check route `POST /api/:tenant/admission/checks`, the issuance of passes from the booking lifecycle, the administration of devices and facility settings, and the daily reset as a job of the scheduler, started with the API. Roles, views and the ticket PDF follow (see [Next steps](#next-steps)). The booking, approval and cancellation paths gain one recorded step each and are otherwise untouched; a booking without a tariff of admission skips it.
 
 ## Where it sits
 
@@ -19,6 +19,9 @@ Admission management turns a booking of an entrance ticket into passes that are 
  Device ── POST /api/:tenant/admission/checks (device key, bound to one facility)
    └─► check service: reserve scan ─► read code ─► verify tag ─► look up pass
                       ─► catch up ─► decide() ─► append to usage log ─► answer
+
+ Administration ── /api/:tenant/admission/devices, /facilities (session, rights)
+ Scheduler ─────── job admission.reset every 5 min: day_reset, auto_exit
 ```
 
 | Module                                             | Responsibility                                                                                                     |
@@ -34,9 +37,11 @@ Admission management turns a booking of an entrance ticket into passes that are 
 | `services/admission/admission-devices.js`          | Device keys, the device middleware (`Authorization: Device <key>`), block and renew                                |
 | `services/admission/admission-issuance.js`         | The passes a booking issues, one per person and booked unit; their restore and void with the booking               |
 | `services/admission/admission-log.js`              | A projection caught up with the usage log; an event appended at the next position, again where a device came first |
+| `services/admission/admission-administration.js`   | Devices (register, block, unblock, renew) and facility settings, validated, for the administration routes          |
+| `services/admission/admission-reset-job.js`        | The daily reset as a job: closes the presences `planReset` names in each usage log, then moves the reset mark      |
 | `services/booking-lifecycle/adapters/admission.js` | The lifecycle adapter `admission`: `issue` and `void`, recorded on failure                                         |
-| `platform/api/routes/admission.routes.js`          | `POST /checks` under `/api/:tenant/admission`                                                                      |
-| `services/scheduler/`                              | Recurring jobs with lease, catch-up, retry and status, shared by all instances                                     |
+| `platform/api/routes/admission.routes.js`          | `POST /checks`, `/devices` and `/facilities` under `/api/:tenant/admission`                                        |
+| `services/scheduler/`                              | Recurring jobs with lease, catch-up, retry and status, shared by all instances; started with the API               |
 
 The core modules (terms, code, state, check, reset, reasons) are pure functions over plain objects; they read no clock, database or environment. That keeps the rules the entrance depends on testable on their own. The store, the check service and the device access are the layer around them; the check service gets clock and ids injected, so its tests run on a fixed clock.
 
@@ -149,8 +154,8 @@ What a booking issues comes from the tariff as the booking holds it since its ch
 | `admissionpasses`     | Pass: tenant, facility, tariff, booking, ticket, position, label, holder, code hash, retired hashes, encrypted identifier, terms, projection, `version` | `tenantId+id`, `tenantId+codeHash`, slot `tenantId+bookingId+tariffId+ticket+position` |
 | `admissionevents`     | Usage log: one event per position `seq` of a pass, with type, time, business day and actor                                                              | `tenantId+passId+seq`                                                                  |
 | `admissionchecks`     | Check log: every scan with device, direction, result, step, reason and the answer it got                                                                | `tenantId+scanId`                                                                      |
-| `admissiondevices`    | Devices: facility, name, key hash, status, created, renewed, last seen                                                                                  | `tenantId+id`, `keyHash`                                                               |
-| `admissionfacilities` | Admission settings of a facility: reset time, time zone, maximum stay, exit scan, notice thresholds                                                     | `tenantId+facilityId`                                                                  |
+| `admissiondevices`    | Devices: facility, name, key hash, status; created, blocked and renewed, each with time and account; last seen                                          | `tenantId+id`, `keyHash`                                                               |
+| `admissionfacilities` | Admission settings of a facility: reset time, time zone, maximum stay, exit scan, notice thresholds, reset mark                                         | `tenantId+facilityId`                                                                  |
 
 The capacity is the `amount` of the facility's bookable; a facility without admission settings answers `404 admission_facility_not_found`.
 
@@ -208,11 +213,36 @@ The same `scanId` sent again gets the first answer and enters nothing twice; a f
 
 A device is registered for one facility and gets a key `adm_` plus 32 random bytes (base64url), shown once; the platform keeps only its SHA-256. The key is no session: it opens nothing but the check of its facility, and only for its own tenant. A device can be blocked (`403`) or given a new key, which ends the old one, each on its own. Every check counts against the device's rate limit (`RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE`, default 120 per minute). The device's last contact is written at most once a minute.
 
+## Administration
+
+Under `/api/:tenant/admission`, with a session. `admission.read` is whoever may read bookables (`manageBookables.readAny`), as for access points; `admission.write` is the tenant owner until the admission role exists (next steps).
+
+| Route                                        | Right   | Answer                                                                                   |
+| -------------------------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `GET /devices?facilityId=`                   | `read`  | the devices of the tenant or of one facility, with status and history, never key or hash |
+| `POST /devices` `{ facilityId, name }`       | `write` | `201 { key, device }`: the key once, with `Cache-Control: no-store`                      |
+| `POST /devices/:deviceId/block` / `/unblock` | `write` | the device: blocked, its next check answers `403`; unblocked, the same key works again   |
+| `POST /devices/:deviceId/renew`              | `write` | `{ key, device }`: the old key ends at once, a blocked device stays blocked              |
+| `GET /facilities`, `GET /facilities/:id`     | `read`  | the settings of the facilities, or of one (`404 admission_facility_not_found`)           |
+| `PUT /facilities/:facilityId`                | `write` | creates or replaces the settings of a bookable of the tenant (`404 bookable_not_found`)  |
+
+```json
+{
+  "resetTime": "03:00",
+  "zone": "Europe/Berlin",
+  "maxStayMinutes": 240,
+  "exitScan": false,
+  "warnings": { "refusedAttempts": 2, "entriesPerDay": 3 }
+}
+```
+
+A `PUT` replaces the settings whole: a missing field takes its default (`03:00`, `Europe/Berlin`, no maximum stay, no exit scan, thresholds 2 and 3); the reset mark `lastResetAt` is the reset job's alone. A device is registered only for a facility with settings. Refusals name the field: `400 invalid_settings`, `invalid_reset_time` (`HH:mm`), `invalid_zone` (IANA), `invalid_max_stay` (1 to 1440 minutes, or null), `invalid_exit_scan`, `invalid_warnings` (1 to 100, `params.field`), `invalid_facility_id`, `invalid_device_name` (1 to 80 characters); `404 admission_device_not_found` for a device the tenant does not have. Block and unblock can be sent twice; each change keeps its time and account.
+
 ## Business day, daily reset, maximum stay
 
 A business day runs from the facility's reset time to the next one (`resetTime`, default `03:00`, time zone of the facility), so a visit past midnight is one day. A presence counts only within its business day and the maximum stay. The check therefore never depends on the reset having run: a guest who left without scanning is let in the next day even if the scheduler was down.
 
-The reset job runs every few minutes. `planReset` names the presences to close: `day_reset` for a presence of an earlier business day, `auto_exit` beyond the maximum stay, whichever ended it first, each with `closedAt`. A second run finds nothing, a run after days without one catches up in one go.
+The reset job `admission.reset` runs every five minutes (`ADMISSION_RESET_INTERVAL_MINUTES`, 1 to 60) over the facilities of every tenant. `planReset` names the presences to close: `day_reset` for a presence of an earlier business day, `auto_exit` beyond the maximum stay, whichever ended it first. Each event is written at the time of the run, with `closedAt` the end of the presence's own business day or stay, also when a run comes days late. The job appends it to the pass's usage log behind any scan that came first, so a guest who scanned out in between keeps the exit, and then moves the facility's reset mark. A second run finds nothing; a pass it cannot write fails the run, which the scheduler retries, and the mark of that facility stays until every presence is closed.
 
 ## Scheduler
 
@@ -223,12 +253,13 @@ The reset job runs every few minutes. `planReset` names the presences to close: 
 - A failed run is retried after 30 s, doubling up to the interval; `pendingSince` keeps the original due time.
 - `status()` reports per job last run, last success, last error, failures and `overdue` (no success for three intervals); failures and catch-ups are logged.
 
+Every instance starts the scheduler with the API once the migrations have run (`startPlatformScheduler`) and stops it on shutdown; `SCHEDULER_ENABLED=false` keeps an instance out, and the others run the jobs. The platform's job so far is `admission.reset`.
+
 ## Next steps
 
-1. Administration routes for devices (register, block, renew) and facility settings; the reset job registered with the scheduler at startup.
-2. Roles: an admission-only right next to the six existing groups; administration views and corrections; check UI.
-3. Ticket PDF per pass on the existing PDF service, with a template per tenant, and the names of the persons of a personal pass; with it the notice to the tenant where an issuance was recorded as failed.
+1. Roles: an admission-only right next to the six existing groups, which then takes `admission.write` from the tenant owner; administration views and corrections; check UI.
+2. Ticket PDF per pass on the existing PDF service, with a template per tenant, and the names of the persons of a personal pass; with it the notice to the tenant where an issuance was recorded as failed.
 
 ## Tests
 
-`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, and the filters the MongoDB store sends. The issuance: one pass per person and unit, nothing twice also under two runs at once, void and restore with the booking's cause, an amendment, a void of the administration that stays, the tariffs it cannot issue named, a void behind a device's entry; the lifecycle's steps per transition and per group member, and a failed issuance recorded. The route appears in the authorization snapshot with `401` for every principal.
+`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, and the filters the MongoDB store sends. The issuance: one pass per person and unit, nothing twice also under two runs at once, void and restore with the booking's cause, an amendment, a void of the administration that stays, the tariffs it cannot issue named, a void behind a device's entry; the lifecycle's steps per transition and per group member, and a failed issuance recorded. The administration: a key shown once and never listed, a block at once and the same key back, a renewal that ends the old key, nothing of another tenant, settings whole with defaults and every refused field; its routes over the API, with `Cache-Control: no-store`. The reset job: day reset and maximum stay in one run across tenants, nothing twice, an exit under way kept, a pass it cannot write failing the run, its run in the scheduler and its start with the API. The routes appear in the authorization snapshot: the check with `401` for every principal, the administration with its rights.

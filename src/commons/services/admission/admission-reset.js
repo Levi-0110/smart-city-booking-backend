@@ -46,7 +46,12 @@ function planReset({ facility, presences, now }) {
   for (const { passId, presentSince } of presences) {
     if (presentSince === null || presentSince === undefined) continue;
     const stayEnds = maxStay === null ? Infinity : presentSince + maxStay;
-    const dayEnds = presentSince < dayStart ? dayStart : Infinity;
+    // A presence of an earlier business day ended with that day: at the
+    // first reset time after it began, however many days a run came late.
+    const dayEnds =
+      presentSince < dayStart
+        ? businessDayStart(presentSince, facility).plus({ days: 1 }).toMillis()
+        : Infinity;
     const closedAt = Math.min(stayEnds, dayEnds);
     if (closedAt > now) continue;
     events.push({

@@ -77,7 +77,10 @@ function registerDevice({
       status: DEVICE_STATUS.ACTIVE,
       createdAt: now,
       createdBy,
+      blockedAt: null,
+      blockedBy: null,
       renewedAt: null,
+      renewedBy: null,
       lastSeenAt: null,
     },
   };

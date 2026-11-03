@@ -76,7 +76,279 @@
       "503":
         description: "`admission_not_configured`: the instance has no `ADMISSION_CODE_SECRET`"
 
+/api/{tenant}/admission/devices:
+  get:
+    tags:
+      - Admission
+    summary: List the devices at the entrances
+    description: |
+      The devices of the tenant, or of one facility, with status and
+      history. Never the key or its hash. For whoever may read bookables
+      (`admission.read`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+      - name: facilityId
+        in: query
+        required: false
+        schema:
+          type: string
+    responses:
+      "200":
+        description: The devices, oldest first
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/AdmissionDevice"
+      "400":
+        description: "`invalid_facility_id`"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.read`
+  post:
+    tags:
+      - Admission
+    summary: Register a device for a facility
+    description: |
+      Registers a device at the entrance of a facility with admission
+      settings and answers its key, once: the platform keeps only its
+      SHA-256. The answer is sent with `Cache-Control: no-store`. For the
+      tenant owner (`admission.write`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - facilityId
+              - name
+            properties:
+              facilityId:
+                type: string
+              name:
+                type: string
+                minLength: 1
+                maxLength: 80
+          example:
+            facilityId: "freibad"
+            name: "Drehkreuz Nord"
+    responses:
+      "201":
+        description: The device and its key, shown this once
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionDeviceWithKey"
+      "400":
+        description: "`invalid_facility_id` or `invalid_device_name`"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.write`
+      "404":
+        description: "`admission_facility_not_found`: the facility has no admission settings"
+
+/api/{tenant}/admission/devices/{deviceId}/block:
+  post:
+    tags:
+      - Admission
+    summary: Block a device
+    description: |
+      Its next check answers `403 device_blocked`; the other devices keep
+      working. Sent twice, it changes nothing. For the tenant owner
+      (`admission.write`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+      - $ref: "#/components/parameters/AdmissionDeviceIdParam"
+    responses:
+      "200":
+        description: The blocked device
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionDevice"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.write`
+      "404":
+        description: "`admission_device_not_found`"
+
+/api/{tenant}/admission/devices/{deviceId}/unblock:
+  post:
+    tags:
+      - Admission
+    summary: Unblock a device
+    description: |
+      The device checks again, with the key it has. For the tenant owner
+      (`admission.write`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+      - $ref: "#/components/parameters/AdmissionDeviceIdParam"
+    responses:
+      "200":
+        description: The active device
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionDevice"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.write`
+      "404":
+        description: "`admission_device_not_found`"
+
+/api/{tenant}/admission/devices/{deviceId}/renew:
+  post:
+    tags:
+      - Admission
+    summary: Give a device a new key
+    description: |
+      The old key ends at once; a blocked device stays blocked. The new key
+      is answered once, with `Cache-Control: no-store`. For the tenant owner
+      (`admission.write`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+      - $ref: "#/components/parameters/AdmissionDeviceIdParam"
+    responses:
+      "200":
+        description: The device and its new key, shown this once
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionDeviceWithKey"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.write`
+      "404":
+        description: "`admission_device_not_found`"
+
+/api/{tenant}/admission/facilities:
+  get:
+    tags:
+      - Admission
+    summary: List the admission settings of the facilities
+    description: For whoever may read bookables (`admission.read`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+    responses:
+      "200":
+        description: The settings, by facility
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/AdmissionFacilitySettings"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.read`
+
+/api/{tenant}/admission/facilities/{facilityId}:
+  get:
+    tags:
+      - Admission
+    summary: Read the admission settings of a facility
+    description: For whoever may read bookables (`admission.read`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+      - $ref: "#/components/parameters/AdmissionFacilityIdParam"
+    responses:
+      "200":
+        description: The settings
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionFacilitySettings"
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.read`
+      "404":
+        description: "`admission_facility_not_found`"
+  put:
+    tags:
+      - Admission
+    summary: Create or replace the admission settings of a facility
+    description: |
+      The settings of a bookable of the tenant, whole: a missing field takes
+      its default. The reset mark is the daily reset's and stays as it was.
+      For the tenant owner (`admission.write`).
+    security:
+      - bearerAuth: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+      - $ref: "#/components/parameters/AdmissionFacilityIdParam"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AdmissionFacilitySettingsInput"
+          example:
+            resetTime: "03:00"
+            zone: "Europe/Berlin"
+            maxStayMinutes: 240
+            exitScan: false
+            warnings:
+              refusedAttempts: 2
+              entriesPerDay: 3
+    responses:
+      "200":
+        description: The settings as kept
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionFacilitySettings"
+      "400":
+        description: >-
+          `invalid_settings`, `invalid_reset_time`, `invalid_zone`,
+          `invalid_max_stay`, `invalid_exit_scan` or `invalid_warnings`
+          (with `params.field`)
+      "401":
+        description: Not signed in
+      "403":
+        description: Without `admission.write`
+      "404":
+        description: "`bookable_not_found`: the tenant has no such bookable"
+
 components:
+  parameters:
+    AdmissionDeviceIdParam:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+    AdmissionFacilityIdParam:
+      name: facilityId
+      in: path
+      required: true
+      description: The id of the facility's bookable
+      schema:
+        type: string
   securitySchemes:
     admissionDeviceKey:
       type: apiKey
@@ -165,3 +437,92 @@ components:
             quotaLeft:
               type: integer
               nullable: true
+    AdmissionDevice:
+      type: object
+      properties:
+        id:
+          type: string
+        facilityId:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, blocked]
+        createdAt:
+          type: integer
+          description: Epoch milliseconds
+        createdBy:
+          type: string
+          nullable: true
+        blockedAt:
+          type: integer
+          nullable: true
+        blockedBy:
+          type: string
+          nullable: true
+        renewedAt:
+          type: integer
+          nullable: true
+        renewedBy:
+          type: string
+          nullable: true
+        lastSeenAt:
+          type: integer
+          nullable: true
+          description: Last check, written at most once a minute
+    AdmissionDeviceWithKey:
+      type: object
+      properties:
+        key:
+          type: string
+          pattern: "^adm_[A-Za-z0-9_-]{43}$"
+          description: "For the device's `Authorization: Device <key>`; shown once"
+        device:
+          $ref: "#/components/schemas/AdmissionDevice"
+    AdmissionFacilitySettingsInput:
+      type: object
+      properties:
+        resetTime:
+          type: string
+          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+          default: "03:00"
+          description: Start of the business day, in `zone`
+        zone:
+          type: string
+          default: "Europe/Berlin"
+          description: IANA time zone
+        maxStayMinutes:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 1440
+          default: null
+          description: Maximum stay; null for none
+        exitScan:
+          type: boolean
+          default: false
+        warnings:
+          type: object
+          nullable: true
+          description: Thresholds of the notices, 1 to 100 each
+          properties:
+            refusedAttempts:
+              type: integer
+              default: 2
+            entriesPerDay:
+              type: integer
+              default: 3
+    AdmissionFacilitySettings:
+      allOf:
+        - $ref: "#/components/schemas/AdmissionFacilitySettingsInput"
+        - type: object
+          properties:
+            facilityId:
+              type: string
+            lastResetAt:
+              type: integer
+              nullable: true
+              description: >-
+                Business day start up to which the daily reset ran, epoch
+                milliseconds

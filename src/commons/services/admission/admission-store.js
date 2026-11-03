@@ -8,6 +8,11 @@
  * position in the bundle - and a slot holds one pass: of two issuances of
  * the same booking at the same moment only one can insert it.
  *
+ * The devices and the settings of the facilities are written by the
+ * administration (admission-administration.js); the daily reset reads the
+ * settings of every tenant and the open presences of a facility
+ * (admission-reset-job.js).
+ *
  * The usage log is the source of truth of a pass and its own lock: an event
  * is appended at the next position of the pass's log (`seq`, unique per
  * pass), so of two devices that scan the same pass at the same moment only
@@ -43,6 +48,25 @@ const sameSlot = (a, b) =>
   a.ticket === b.ticket &&
   a.position === b.position;
 
+/** The defaults of the facility settings (admissionFacilitySchema). */
+const FACILITY_DEFAULTS = Object.freeze({
+  resetTime: "03:00",
+  zone: "Europe/Berlin",
+  maxStayMinutes: null,
+  exitScan: false,
+  warnings: null,
+  lastResetAt: null,
+});
+
+/** The settings of a facility as both stores answer them. */
+function settingsOf(record) {
+  const settings = { tenantId: record.tenantId, facilityId: record.facilityId };
+  for (const [field, fallback] of Object.entries(FACILITY_DEFAULTS)) {
+    settings[field] = copy(record[field] ?? fallback);
+  }
+  return settings;
+}
+
 /** In memory, for the tests: the same answers as the MongoDB store. */
 class MemoryAdmissionStore {
   constructor() {
@@ -51,9 +75,10 @@ class MemoryAdmissionStore {
     this.checks = new Map();
     this.devices = new Map();
     this.facilities = new Map();
+    this.bookables = new Map();
   }
 
-  /** Test setup: puts a pass, device or facility in place. */
+  /** Test setup: puts a pass, device, facility or bookable in place. */
   putPass(pass) {
     this.passes.set(`${pass.tenantId}:${pass.id}`, copy(pass));
   }
@@ -64,6 +89,11 @@ class MemoryAdmissionStore {
 
   putFacility(facility) {
     this.facilities.set(`${facility.tenantId}:${facility.id}`, copy(facility));
+  }
+
+  /** A bookable a facility's settings may be saved for, with its `amount`. */
+  putBookable({ tenantId, id, amount = null }) {
+    this.bookables.set(`${tenantId}:${id}`, { amount });
   }
 
   async passByCodeHash(tenantId, codeHash) {
@@ -196,6 +226,111 @@ class MemoryAdmissionStore {
 
   async facility(tenantId, facilityId) {
     return copy(this.facilities.get(`${tenantId}:${facilityId}`) ?? null);
+  }
+
+  async devicesOf(tenantId, { facilityId } = {}) {
+    return [...this.devices.values()]
+      .filter(
+        (device) =>
+          device.tenantId === tenantId &&
+          (facilityId === undefined || device.facilityId === facilityId),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map(copy);
+  }
+
+  async deviceById(tenantId, deviceId) {
+    const device = [...this.devices.values()].find(
+      (stored) => stored.tenantId === tenantId && stored.id === deviceId,
+    );
+    return copy(device ?? null);
+  }
+
+  /** False where the id (in the tenant) or the key hash is taken. */
+  async insertDevice(device) {
+    const taken =
+      this.devices.has(device.keyHash) ||
+      [...this.devices.values()].some(
+        (stored) =>
+          stored.tenantId === device.tenantId && stored.id === device.id,
+      );
+    if (taken) {
+      return false;
+    }
+    this.putDevice(device);
+    return true;
+  }
+
+  /** The device with `fields` set, null where the tenant has no such device. */
+  async updateDevice(tenantId, deviceId, fields) {
+    const device = await this.deviceById(tenantId, deviceId);
+    if (!device) {
+      return null;
+    }
+    this.devices.delete(device.keyHash);
+    const updated = { ...device, ...copy(fields) };
+    this.putDevice(updated);
+    return copy(updated);
+  }
+
+  async facilitySettingsOf(tenantId) {
+    return [...this.facilities.values()]
+      .filter((record) => record.tenantId === tenantId)
+      .map((record) => settingsOf({ ...record, facilityId: record.id }))
+      .sort((a, b) => a.facilityId.localeCompare(b.facilityId));
+  }
+
+  async facilitySettings(tenantId, facilityId) {
+    const record = this.facilities.get(`${tenantId}:${facilityId}`);
+    return record ? settingsOf({ ...record, facilityId }) : null;
+  }
+
+  /** Creates or replaces the settings; the reset mark stays as it was. */
+  async saveFacilitySettings(tenantId, facilityId, settings) {
+    const key = `${tenantId}:${facilityId}`;
+    const record = {
+      tenantId,
+      id: facilityId,
+      capacity: this.bookables.get(key)?.amount ?? null,
+      ...this.facilities.get(key),
+      ...copy(settings),
+    };
+    this.facilities.set(key, record);
+    return settingsOf({ ...record, facilityId });
+  }
+
+  async bookableExists(tenantId, bookableId) {
+    const key = `${tenantId}:${bookableId}`;
+    return this.bookables.has(key) || this.facilities.has(key);
+  }
+
+  /** The settings of the facilities of every tenant, for the daily reset. */
+  async allFacilitySettings() {
+    return [...this.facilities.values()].map((record) =>
+      settingsOf({ ...record, facilityId: record.id }),
+    );
+  }
+
+  async openPresences(tenantId, facilityId) {
+    return [...this.passes.values()]
+      .filter(
+        (pass) =>
+          pass.tenantId === tenantId &&
+          pass.facilityId === facilityId &&
+          pass.projection?.presentSince != null,
+      )
+      .map((pass) => ({
+        passId: pass.id,
+        presentSince: pass.projection.presentSince,
+      }));
+  }
+
+  /** Moves the facility's reset mark forward, never back. */
+  async markReset(tenantId, facilityId, upTo) {
+    const record = this.facilities.get(`${tenantId}:${facilityId}`);
+    if (record && !(record.lastResetAt >= upTo)) {
+      record.lastResetAt = upTo;
+    }
   }
 }
 
@@ -366,6 +501,107 @@ class MongoAdmissionStore {
       lastResetAt: settings.lastResetAt,
     };
   }
+
+  async devicesOf(tenantId, { facilityId } = {}) {
+    const filter =
+      facilityId === undefined ? { tenantId } : { tenantId, facilityId };
+    return await this.model("devices")
+      .find(filter)
+      .sort({ createdAt: 1 })
+      .lean();
+  }
+
+  async deviceById(tenantId, deviceId) {
+    return await this.model("devices")
+      .findOne({ tenantId, id: deviceId })
+      .lean();
+  }
+
+  /** False where the id (in the tenant) or the key hash is taken. */
+  async insertDevice(device) {
+    try {
+      await this.model("devices").create(device);
+      return true;
+    } catch (err) {
+      if (err?.code === DUPLICATE_KEY) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  /** The device with `fields` set, null where the tenant has no such device. */
+  async updateDevice(tenantId, deviceId, fields) {
+    return await this.model("devices")
+      .findOneAndUpdate(
+        { tenantId, id: deviceId },
+        { $set: fields },
+        { new: true },
+      )
+      .lean();
+  }
+
+  async facilitySettingsOf(tenantId) {
+    const records = await this.model("facilities")
+      .find({ tenantId })
+      .sort({ facilityId: 1 })
+      .lean();
+    return records.map(settingsOf);
+  }
+
+  async facilitySettings(tenantId, facilityId) {
+    const record = await this.model("facilities")
+      .findOne({ tenantId, facilityId })
+      .lean();
+    return record ? settingsOf(record) : null;
+  }
+
+  /** Creates or replaces the settings; the reset mark stays as it was. */
+  async saveFacilitySettings(tenantId, facilityId, settings) {
+    const record = await this.model("facilities")
+      .findOneAndUpdate(
+        { tenantId, facilityId },
+        { $set: settings },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      )
+      .lean();
+    return settingsOf(record);
+  }
+
+  async bookableExists(tenantId, bookableId) {
+    return Boolean(
+      await this.model("bookables").exists({ tenantId, id: bookableId }),
+    );
+  }
+
+  /** The settings of the facilities of every tenant, for the daily reset. */
+  async allFacilitySettings() {
+    const records = await this.model("facilities").find({}).lean();
+    return records.map(settingsOf);
+  }
+
+  async openPresences(tenantId, facilityId) {
+    const passes = await this.model("passes")
+      .find({ tenantId, facilityId, "projection.presentSince": { $ne: null } })
+      .select({ id: 1, "projection.presentSince": 1 })
+      .lean();
+    return passes.map((pass) => ({
+      passId: pass.id,
+      presentSince: pass.projection.presentSince,
+    }));
+  }
+
+  /** Moves the facility's reset mark forward, never back. */
+  async markReset(tenantId, facilityId, upTo) {
+    await this.model("facilities").updateOne(
+      { tenantId, facilityId },
+      { $max: { lastResetAt: upTo } },
+    );
+  }
 }
 
-module.exports = { MemoryAdmissionStore, MongoAdmissionStore };
+module.exports = {
+  MemoryAdmissionStore,
+  MongoAdmissionStore,
+  FACILITY_DEFAULTS,
+};

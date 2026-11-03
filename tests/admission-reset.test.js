@@ -86,7 +86,13 @@ describe("admission daily reset", () => {
       now: at("2027-07-04T08:00"),
     });
     expect(plan.resetUpTo).to.equal(at("2027-07-04T03:00"));
-    expect(plan.events.map(({ passId }) => passId)).to.deep.equal(["a", "b"]);
+    // Each presence ended with its own business day, not with the run.
+    expect(
+      plan.events.map(({ passId, event }) => [passId, event.closedAt]),
+    ).to.deep.equal([
+      ["a", at("2027-06-29T03:00")],
+      ["b", at("2027-07-01T03:00")],
+    ]);
   });
 
   it("finds nothing left to close on a second run", () => {
