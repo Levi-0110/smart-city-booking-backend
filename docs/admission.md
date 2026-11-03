@@ -2,7 +2,7 @@
 
 Admission management turns a booking of an entrance ticket into passes that are checked at the entrance of a facility, such as a public pool: season, day, quota, family and group tickets, and time-limited access for a group of people. German terms in the [glossary](../GLOSSARY.md#einlass).
 
-**State of this branch:** the pure core and the scheduler. Storage, device access, the check route and the issuance from the booking lifecycle build on it and follow (see [Next steps](#next-steps)). Nothing here is wired into the running API yet; existing booking, approval and cancellation paths are untouched.
+**State of this branch:** the pure core, the scheduler, the storage in MongoDB, the check service, device access and the check route `POST /api/:tenant/admission/checks`. The route is mounted, but no device can be registered yet, so it answers `401` to every caller. The registration of devices by the administration, the reset job at startup and the issuance from the booking lifecycle follow (see [Next steps](#next-steps)). Existing booking, approval and cancellation paths are untouched.
 
 ## Where it sits
 
@@ -16,21 +16,26 @@ Admission management turns a booking of an entrance ticket into passes that are 
    ▼
  Usage log                          entries, exits, resets, corrections with account and reason
 
- Device ── POST /api/:tenant/admission/checks (planned, device key, bound to one facility)
-   └─► check service: read code ─► verify tag ─► look up pass ─► decide() ─► conditional write
+ Device ── POST /api/:tenant/admission/checks (device key, bound to one facility)
+   └─► check service: reserve scan ─► read code ─► verify tag ─► look up pass
+                      ─► catch up ─► decide() ─► append to usage log ─► answer
 ```
 
-| Module                                    | Responsibility                                                                                                  |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `services/admission/admission-terms.js`   | Admission definition of a tariff, its validation, the snapshot a pass keeps, the German rule preview (Pos. 3.6) |
-| `services/admission/admission-code.js`    | Access identifier, check symbol, signed QR payload, lookup hash, reading a scan or typed text                   |
-| `services/admission/admission-state.js`   | Usage events, projection, replay, computed state, corrections allowed per state                                 |
-| `services/admission/admission-check.js`   | The six steps of the check, result, reason, notices, the one effect                                             |
-| `services/admission/admission-reset.js`   | Daily reset and maximum stay as a plan for the scheduled job                                                    |
-| `services/admission/admission-reasons.js` | Vocabulary and German texts of results, reasons, notices, void causes                                           |
-| `services/scheduler/`                     | Recurring jobs with lease, catch-up, retry and status, shared by all instances                                  |
+| Module                                          | Responsibility                                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `services/admission/admission-terms.js`         | Admission definition of a tariff, its validation, the snapshot a pass keeps, the German rule preview (Pos. 3.6) |
+| `services/admission/admission-code.js`          | Access identifier, check symbol, signed QR payload, lookup hash, reading a scan or typed text                   |
+| `services/admission/admission-state.js`         | Usage events, projection, replay, computed state, corrections allowed per state                                 |
+| `services/admission/admission-check.js`         | The six steps of the check, result, reason, notices, the one effect                                             |
+| `services/admission/admission-reset.js`         | Daily reset and maximum stay as a plan for the scheduled job                                                    |
+| `services/admission/admission-reasons.js`       | Vocabulary and German texts of results, reasons, notices, void causes                                           |
+| `services/admission/admission-store.js`         | Passes, usage log, check log, devices, facility settings: MongoDB for the API, in memory for the tests          |
+| `services/admission/admission-check-service.js` | The check of one scan: idempotent by `scanId`, one entry per pass under concurrent scans, check log             |
+| `services/admission/admission-devices.js`       | Device keys, the device middleware (`Authorization: Device <key>`), block and renew                             |
+| `platform/api/routes/admission.routes.js`       | `POST /checks` under `/api/:tenant/admission`                                                                   |
+| `services/scheduler/`                           | Recurring jobs with lease, catch-up, retry and status, shared by all instances                                  |
 
-All admission modules are pure functions over plain objects; they read no clock, database or environment. That keeps the rules the entrance depends on testable on their own and lets the storage layer change without touching them.
+The core modules (terms, code, state, check, reset, reasons) are pure functions over plain objects; they read no clock, database or environment. That keeps the rules the entrance depends on testable on their own. The store, the check service and the device access are the layer around them; the check service gets clock and ids injected, so its tests run on a fixed clock.
 
 ## Tariff definition
 
@@ -55,7 +60,7 @@ A tariff is a bookable of type `ticket` under the facility. Its definition, at `
 
 |              |                                                                                                                                                                                                          |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Identifier   | 16 symbols, printed `7KQ2-M9XD-4RTB-H3WA`: 15 from `crypto.randomInt` (73 bits) and a check symbol                                                                                                       |
+| Identifier   | 16 symbols, printed `7KQ2-M9XD-4RTB-H3WS`: 15 from `crypto.randomInt` (73 bits) and a check symbol                                                                                                       |
 | Alphabet     | `0-9 A-X` without `I L O U` (Crockford) and without `Y Z`, which keyboard-wedge scanners swap between QWERTY and QWERTZ; on input `I L` read as `1`, `O` as `0`                                          |
 | Check symbol | Luhn mod 30: catches every single wrong symbol and every swap of neighbours except `0`/`X`, so a typo is answered without a lookup                                                                       |
 | QR payload   | `BLT1.<identifier>.<tag>`, tag = 16 symbols (78 bits) of HMAC-SHA-256 over tenant and identifier under a key derived per tenant from `ADMISSION_CODE_SECRET`; QR alphanumeric mode, version 3 at level Q |
@@ -109,6 +114,72 @@ Corrections by the administration need the account and a reason (`problemsOfEven
 
 Results: `granted`, `granted_with_notice`, `denied`; an exit scan answers `exited` or `not_present`. Notices tell the staff what was recorded and never act on it (Pos. 5.5): re-entry without quota, last quota day, compare the person, repeated refused attempts, unusually many entries in a day (thresholds per facility).
 
+## Storage
+
+| Collection            | Holds                                                                                                                                           | Unique                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `admissionpasses`     | Pass: tenant, facility, tariff, booking, position, label, holder, code hash, retired hashes, encrypted identifier, terms, projection, `version` | `tenantId+id`, `tenantId+codeHash` |
+| `admissionevents`     | Usage log: one event per position `seq` of a pass, with type, time, business day and actor                                                      | `tenantId+passId+seq`              |
+| `admissionchecks`     | Check log: every scan with device, direction, result, step, reason and the answer it got                                                        | `tenantId+scanId`                  |
+| `admissiondevices`    | Devices: facility, name, key hash, status, created, renewed, last seen                                                                          | `tenantId+id`, `keyHash`           |
+| `admissionfacilities` | Admission settings of a facility: reset time, time zone, maximum stay, exit scan, notice thresholds                                             | `tenantId+facilityId`              |
+
+The capacity is the `amount` of the facility's bookable; a facility without admission settings answers `404 admission_facility_not_found`.
+
+The usage log is the lock. An event is appended at position `version + 1` of its pass; of two devices that scan the same pass at the same moment only one can write that position, the other gets the duplicate key, reads the pass again and now sees it present. The projection on the pass follows in a second write, conditional on `version`. A process that dies between the two writes leaves the projection one event behind; the next check applies the events after `version` (or replays the whole log after an `undo_entry`) before it decides.
+
+## Check API
+
+`POST /api/:tenant/admission/checks` with `Authorization: Device <key>`:
+
+```json
+{
+  "code": "BLT1.7KQ2M9XD4RTBH3WS.…",
+  "scanId": "gate-1-000183",
+  "direction": "entry"
+}
+```
+
+`code` is what the scanner read or the staff typed (up to 256 characters), `direction` is `entry` (default) or `exit`, `scanId` (1 to 64 of `A-Z a-z 0-9 _ -`) is the device's id of the scan. The answer, `200`:
+
+```json
+{
+  "scanId": "gate-1-000183",
+  "result": "denied",
+  "step": 4,
+  "reason": "already_present",
+  "message": "Bereits eingecheckt seit 09:15, kein Austritt erfasst",
+  "notices": [],
+  "pass": {
+    "id": "…",
+    "label": "Saisonkarte · Erwachsene",
+    "holder": null,
+    "state": "present",
+    "validUntil": 1821045600000,
+    "quotaLeft": null
+  }
+}
+```
+
+It carries no booking, payment or contact data. A refusal is a `200` with `result: denied`; error codes are for requests that cannot be checked:
+
+| Status | Code                                                   | When                                                                 |
+| ------ | ------------------------------------------------------ | -------------------------------------------------------------------- |
+| 400    | `invalid_code`, `invalid_scan_id`, `invalid_direction` | malformed request                                                    |
+| 401    | `device_key_missing`, `device_unknown`                 | no device key, or none of this tenant                                |
+| 403    | `device_blocked`                                       | device blocked by the administration                                 |
+| 404    | `admission_facility_not_found`                         | the device's facility has no admission settings                      |
+| 409    | `scan_in_progress`                                     | the same `scanId` is still being checked (younger than 10 s): retry  |
+| 409    | `admission_check_contended`                            | three attempts in a row lost the race for the pass: retry            |
+| 429    | `too_many_checks`                                      | more than 120 checks per minute from one device, with `Retry-After`  |
+| 503    | `admission_not_configured`                             | the instance has no `ADMISSION_CODE_SECRET` (at least 32 characters) |
+
+The same `scanId` sent again gets the first answer and enters nothing twice; a first attempt that died under way (pending for 10 s or more) is checked again under the same `scanId`.
+
+## Device access
+
+A device is registered for one facility and gets a key `adm_` plus 32 random bytes (base64url), shown once; the platform keeps only its SHA-256. The key is no session: it opens nothing but the check of its facility, and only for its own tenant. A device can be blocked (`403`) or given a new key, which ends the old one, each on its own. Every check counts against the device's rate limit (`RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE`, default 120 per minute). The device's last contact is written at most once a minute.
+
 ## Business day, daily reset, maximum stay
 
 A business day runs from the facility's reset time to the next one (`resetTime`, default `03:00`, time zone of the facility), so a visit past midnight is one day. A presence counts only within its business day and the maximum stay. The check therefore never depends on the reset having run: a guest who left without scanning is let in the next day even if the scheduler was down.
@@ -126,12 +197,11 @@ The reset job runs every few minutes. `planReset` names the presences to close: 
 
 ## Next steps
 
-1. Storage: `AdmissionPass` (tenant, facility, tariff, booking, ticket, code hash, retired hashes, encrypted identifier, terms, projection, version), `AdmissionEvent` (usage log), `AdmissionCheck` (check log incl. refusals, idempotent by `scanId`), `AdmissionDevice`.
-2. Device access: `Authorization: Device <key>`, key stored as hash, bound to one facility, rate limited with `RateLimiter`, blockable and renewable; route `POST /api/:tenant/admission/checks` marked `tokenAuthorized()`.
-3. Issuance as lifecycle adapter `admission` with the failure policy of the other adapters.
-4. Roles: an admission-only right next to the six existing groups; administration views and corrections; check UI.
-5. Ticket PDF per pass on the existing PDF service, with a template per tenant.
+1. Administration routes for devices (register, block, renew) and facility settings; the reset job registered with the scheduler at startup.
+2. Issuance as lifecycle adapter `admission` with the failure policy of the other adapters.
+3. Roles: an admission-only right next to the six existing groups; administration views and corrections; check UI.
+4. Ticket PDF per pass on the existing PDF service, with a template per tenant.
 
 ## Tests
 
-`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry.
+`tests/admission-*.test.js` and `tests/scheduler-job-runner.test.js`: every step and its reason, the order of the steps, quota per business day, re-entry, lock period, the end of presence without reset, the states and their precedence, replay with undone entries, the code's error detection, the QR size, the reset plan and the scheduler's lease, catch-up and retry. The check service: a scan sent twice, a scan under way, two devices at the same moment, a projection caught up from the log, exit, typed identifiers, forged, replaced and unknown codes, repeated attempts, capacity at entry, malformed requests and a missing secret. Device access over HTTP with the real error handler, and the filters the MongoDB store sends. The route appears in the authorization snapshot with `401` for every principal.

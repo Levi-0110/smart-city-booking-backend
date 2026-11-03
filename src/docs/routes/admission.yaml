@@ -1,0 +1,167 @@
+# swagger/routes/admission.yaml
+
+/api/{tenant}/admission/checks:
+  post:
+    tags:
+      - Admission
+    summary: Check one scan at the entrance of a facility
+    description: |
+      The route of the devices at the entrances (glossary „Einlassgerät“).
+      A device authorizes itself with the key it was registered with, not
+      with a session; it checks passes of its own facility only. Reads the
+      code, verifies the QR tag, looks up the pass, decides in six steps
+      (code, validity, usage, presence, lock period, capacity) and writes a
+      granted entry or an exit into the usage log of the pass.
+
+      A refusal is a `200` with `result: denied`, its step, its reason and
+      the German text for the staff. The answer carries no booking, payment
+      or contact data.
+
+      Idempotent by `scanId`: a scan sent again gets the first answer and
+      enters nothing twice. Two devices that scan the same pass at the same
+      moment cannot both enter it.
+
+      Limit: 120 checks per device per minute
+      (`RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE`).
+    security:
+      - admissionDeviceKey: []
+    parameters:
+      - $ref: "#/components/parameters/TenantParam"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AdmissionCheckRequest"
+          example:
+            code: "BLT1.7KQ2M9XD4RTBH3WS.4D2KQ7M9XR3T8HW1"
+            scanId: "gate-1-000183"
+            direction: entry
+    responses:
+      "200":
+        description: The answer of the check, also for a refusal
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdmissionCheckAnswer"
+            example:
+              scanId: "gate-1-000183"
+              result: denied
+              step: 4
+              reason: already_present
+              message: "Bereits eingecheckt seit 09:15, kein Austritt erfasst"
+              notices: []
+              pass:
+                id: "pass-7KQ2"
+                label: "Saisonkarte · Erwachsene"
+                holder: null
+                state: present
+                validUntil: 1821045600000
+                quotaLeft: null
+      "400":
+        description: "`invalid_code`, `invalid_scan_id` or `invalid_direction`"
+      "401":
+        description: "`device_key_missing` or `device_unknown` (no device of this tenant)"
+      "403":
+        description: "`device_blocked`"
+      "404":
+        description: "`admission_facility_not_found`: the device's facility has no admission settings"
+      "409":
+        description: >-
+          `scan_in_progress` - the same `scanId` is still being checked;
+          `admission_check_contended` - three attempts in a row lost the race
+          for the pass. Both: retry after a second
+      "429":
+        description: "`too_many_checks`, with `Retry-After`"
+      "503":
+        description: "`admission_not_configured`: the instance has no `ADMISSION_CODE_SECRET`"
+
+components:
+  securitySchemes:
+    admissionDeviceKey:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: |
+        `Device <key>`: the key a device got at its registration, `adm_`
+        and 43 symbols of base64url. Shown once; the platform keeps only its
+        SHA-256. Not a session and not a bearer token.
+  schemas:
+    AdmissionCheckRequest:
+      type: object
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          maxLength: 256
+          description: >-
+            What the scanner read (QR payload `BLT1.<identifier>.<tag>`) or
+            the staff typed (the identifier, case and dashes ignored)
+        scanId:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{1,64}$"
+          description: >-
+            The device's id of this scan; the same id sent again gets the
+            first answer. Without it, every request is a scan of its own
+        direction:
+          type: string
+          enum: [entry, exit]
+          default: entry
+    AdmissionCheckAnswer:
+      type: object
+      properties:
+        scanId:
+          type: string
+        result:
+          type: string
+          enum: [granted, granted_with_notice, denied, exited, not_present]
+        step:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 6
+          description: The refusing step, null unless denied
+        reason:
+          type: string
+          nullable: true
+          description: >-
+            Reason of a refusal, e.g. `code_not_genuine`, `expired`,
+            `quota_exhausted`, `already_present`, `lock_period`,
+            `capacity_reached` (docs/admission.md)
+        message:
+          type: string
+          description: German text for the staff
+        notices:
+          type: array
+          description: What the staff is told without a refusal (Pos. 5.5)
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+        pass:
+          type: object
+          nullable: true
+          description: The pass as the staff may see it, null unless the code resolved to a pass
+          properties:
+            id:
+              type: string
+            label:
+              type: string
+            holder:
+              type: string
+              nullable: true
+              description: Name of the holder of a personal pass
+            state:
+              type: string
+              enum: [issued, absent, present, consumed, expired, blocked, void]
+            validUntil:
+              type: integer
+              nullable: true
+              description: End of validity, epoch milliseconds (exclusive)
+            quotaLeft:
+              type: integer
+              nullable: true

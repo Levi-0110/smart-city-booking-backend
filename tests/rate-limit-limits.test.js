@@ -25,6 +25,8 @@ const ENV_KEYS = [
   "RATE_LIMIT_GEO_OUTBOUND_WINDOW_SECONDS",
   "RATE_LIMIT_GEO_TILES_OUTBOUND",
   "RATE_LIMIT_GEO_TILES_OUTBOUND_WINDOW_SECONDS",
+  "RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE",
+  "RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE_WINDOW_SECONDS",
 ];
 
 describe("rate-limit limits", function () {
@@ -143,6 +145,23 @@ describe("rate-limit limits", function () {
     assert.deepStrictEqual(limits.geoTilesOutbound(), {
       key: "geo:tiles:outbound",
       limit: 20,
+      windowMs: 10_000,
+    });
+  });
+
+  it("carries the admission default, 120 checks per device and minute, on a key per device", function () {
+    assert.deepStrictEqual(limits.admissionChecksPerDevice("gate-1"), {
+      key: "admission:device:gate-1",
+      limit: 120,
+      windowMs: 60_000,
+    });
+
+    process.env.RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE = "30";
+    process.env.RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE_WINDOW_SECONDS = "10";
+
+    assert.deepStrictEqual(limits.admissionChecksPerDevice("gate-2"), {
+      key: "admission:device:gate-2",
+      limit: 30,
       windowMs: 10_000,
     });
   });

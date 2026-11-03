@@ -2311,6 +2311,14 @@
     "instanceOwner": 200,
     "expiredToken": 401
   },
+  "POST /api/:tenant/admission/checks": {
+    "anonymous": 401,
+    "signedIn": 401,
+    "roleHolder": 401,
+    "tenantOwner": 401,
+    "instanceOwner": 401,
+    "expiredToken": 401
+  },
   "GET /api/:tenant/ical/events": {
     "anonymous": 200,
     "signedIn": 200,

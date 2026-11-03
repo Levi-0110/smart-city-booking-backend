@@ -127,7 +127,7 @@ function normalize(text) {
  * The identifier in four groups for print and display.
  *
  * @param {string} identifier
- * @returns {string} e.g. `7KQ2-M9XD-4RTB-H3WA`
+ * @returns {string} e.g. `7KQ2-M9XD-4RTB-H3WS`
  */
 function formatIdentifier(identifier) {
   return identifier.match(/.{1,4}/g).join("-");

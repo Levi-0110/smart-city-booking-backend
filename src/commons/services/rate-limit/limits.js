@@ -131,6 +131,18 @@ function geoTilesOutbound() {
   };
 }
 
+/**
+ * Checks of one device at an entrance: 120 per minute. Enough for a queue
+ * at the opening, and it slows down anyone trying codes with a lost or
+ * copied key.
+ */
+function admissionChecksPerDevice(deviceId) {
+  return {
+    key: `admission:device:${normalizeSubject(deviceId)}`,
+    ...limitFrom("RATE_LIMIT_ADMISSION_CHECKS_PER_DEVICE", 120, 60),
+  };
+}
+
 module.exports = {
   signupPerIp,
   verificationMailPerAccount,
@@ -141,5 +153,6 @@ module.exports = {
   geoPerUser,
   geoOutbound,
   geoTilesOutbound,
+  admissionChecksPerDevice,
   positiveInt,
 };

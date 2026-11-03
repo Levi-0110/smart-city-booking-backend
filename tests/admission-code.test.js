@@ -90,13 +90,13 @@ describe("admission code", () => {
     });
 
     it("reads what the staff types: case, separators and look-alikes", () => {
-      expect(normalize(" 7kq2-m9xd 4rtb-h3wa ")).to.equal("7KQ2M9XD4RTBH3WA");
+      expect(normalize(" 7kq2-m9xd 4rtb-h3ws ")).to.equal("7KQ2M9XD4RTBH3WS");
       expect(normalize("I0L1-O")).to.equal("10110");
     });
 
     it("prints in four groups", () => {
-      expect(formatIdentifier("7KQ2M9XD4RTBH3WA")).to.equal(
-        "7KQ2-M9XD-4RTB-H3WA",
+      expect(formatIdentifier("7KQ2M9XD4RTBH3WS")).to.equal(
+        "7KQ2-M9XD-4RTB-H3WS",
       );
     });
   });

@@ -35,10 +35,12 @@ function retryDelay(failures, everyMs) {
 }
 
 /**
- * Recurring background work (Pos. 4.4). The platform had none; the hourly
- * grant cleanup left with 4.4. A job is a name, an interval and an idempotent
- * run. Its state lives in a store that every instance of the API shares, so
- * the runner on each instance agrees on what is due:
+ * Recurring background work (Pos. 4.4). Besides the optional rule engine,
+ * which schedules the tenants' rules in each process on its own, the platform
+ * has had none since the hourly grant cleanup left with 4.4. A job is a name,
+ * an interval and an idempotent run. Its state lives in a store that every
+ * instance of the API shares, so the runner on each instance agrees on what
+ * is due:
  *
  * - One run at a time: a run takes a lease on the job. An instance that ticks
  *   meanwhile skips it; a lease of a crashed instance runs out on its own.
